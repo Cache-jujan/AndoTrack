@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sqlalchemy
+pymysql
+python-jose[cryptography]
+passlib[bcrypt]
+firebase-admin
+python-dotenv
+scikit-learn
+numpy
+pandas
+joblib
