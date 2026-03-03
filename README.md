@@ -1,6 +1,6 @@
 # 🏃 &DoTrack — Real-Time Marathon Tracking System
 
-> A capstone project for &DOTSports Events — built with Flutter, FastAPI, Firebase, and Machine Learning.
+> A project for &DOTSports Events — built with Flutter, FastAPI, Firebase, and Machine Learning.
 
 ---
 
