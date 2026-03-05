@@ -10,7 +10,32 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await _checkLocationPermission();
   runApp(const ProviderScope(child: MyApp()));
+}
+
+Future<void> _checkLocationPermission() async {
+  bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  if (!serviceEnabled) {
+    print('❌ Location services are disabled.');
+    return;
+  }
+
+  LocationPermission permission = await Geolocator.checkPermission();
+  if (permission == LocationPermission.denied) {
+    permission = await Geolocator.requestPermission();
+    if (permission == LocationPermission.denied) {
+      print('❌ Location permission denied.');
+      return;
+    }
+  }
+
+  if (permission == LocationPermission.deniedForever) {
+    print('❌ Location permission permanently denied.');
+    return;
+  }
+
+  print('✅ Location permission granted.');
 }
 
 class MyApp extends StatelessWidget {
