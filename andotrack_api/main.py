@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routes import auth, races, runners, checkpoints, leaderboard
 
+import firebase 
 import models.user
 import models.race
 import models.checkpoint
