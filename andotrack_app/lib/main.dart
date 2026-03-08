@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'package:geolocator/geolocator.dart';
+import 'services/firebase_service.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,11 +33,11 @@ Future<void> _checkLocationPermission() async {
   }
 
   if (permission == LocationPermission.deniedForever) {
-    print('❌ Location permission permanently denied.');
+    print('Location permission permanently denied :< ');
     return;
   }
 
-  print('✅ Location permission granted.');
+  print('Location permission granted :>');
 }
 
 class MyApp extends StatelessWidget {
