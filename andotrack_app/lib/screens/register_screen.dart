@@ -1,38 +1,45 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import 'login_screen.dart';
 import 'organizer_dashboard.dart';
 import 'runner_map_screen.dart';
-import 'register_screen.dart'; // ← added
 
-class LoginScreen extends ConsumerStatefulWidget {
-  const LoginScreen({super.key});
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
 
   @override
-  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+  State<RegisterScreen> createState() => _RegisterScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
+class _RegisterScreenState extends State<RegisterScreen> {
+  final _nameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  String _selectedRole = 'runner';
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
 
   @override
   void dispose() {
+    _nameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
 
-  Future<void> _login() async {
+  Future<void> _register() async {
+    final name = _nameController.text.trim();
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
-      setState(() => _errorMessage = 'Please enter email and password.');
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
+      setState(() => _errorMessage = 'Please fill in all fields.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setState(() => _errorMessage = 'Password must be at least 6 characters.');
       return;
     }
 
@@ -42,20 +49,17 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     });
 
     try {
-      final result = await ApiService.login(email, password);
+      final result = await ApiService.register(name, email, password, _selectedRole);
 
       if (result['success'] == true) {
         final token = result['token'] as String;
         final role = result['role'] as String;
 
-        // Store JWT in shared_preferences
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('jwt_token', token);
-        await prefs.setString('user_role', role);
+        await ApiService.saveToken(token);
+        await ApiService.saveRole(role);
 
         if (!mounted) return;
 
-        // Role-based navigation
         if (role == 'organizer') {
           Navigator.pushReplacement(
             context,
@@ -66,13 +70,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const RunnerMapScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
           );
         }
       } else {
-        setState(() => _errorMessage = result['message'] ?? 'Login failed.');
+        setState(() => _errorMessage = result['message'] ?? 'Registration failed.');
       }
     } catch (e) {
       setState(() => _errorMessage = 'Connection error. Is the server running?');
@@ -85,14 +87,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          onPressed: () => Navigator.pop(context),
+        ),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo / Title
-              const SizedBox(height: 32),
+              // Header
               Center(
                 child: Column(
                   children: [
@@ -111,28 +120,39 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 16),
                     const Text(
-                      'AndoTrack',
+                      'Create Account',
                       style: TextStyle(
-                        fontSize: 32,
+                        fontSize: 28,
                         fontWeight: FontWeight.bold,
                         color: Colors.blue,
                       ),
                     ),
                     const Text(
-                      'Race Tracking System',
+                      'Join AndoTrack',
                       style: TextStyle(color: Colors.grey),
                     ),
                   ],
                 ),
               ),
 
-              const SizedBox(height: 48),
+              const SizedBox(height: 36),
 
-              // Email field
-              const Text(
-                'Email',
-                style: TextStyle(fontWeight: FontWeight.w600),
+              // Name
+              const Text('Full Name', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _nameController,
+                decoration: InputDecoration(
+                  hintText: 'Enter your name',
+                  prefixIcon: const Icon(Icons.person_outline),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                ),
               ),
+
+              const SizedBox(height: 20),
+
+              // Email
+              const Text('Email', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _emailController,
@@ -140,46 +160,62 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 decoration: InputDecoration(
                   hintText: 'Enter your email',
                   prefixIcon: const Icon(Icons.email_outlined),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
 
               const SizedBox(height: 20),
 
-              // Password field
-              const Text(
-                'Password',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+              // Password
+              const Text('Password', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _passwordController,
                 obscureText: _obscurePassword,
                 decoration: InputDecoration(
-                  hintText: 'Enter your password',
+                  hintText: 'At least 6 characters',
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscurePassword
-                          ? Icons.visibility_off
-                          : Icons.visibility,
+                      _obscurePassword ? Icons.visibility_off : Icons.visibility,
                     ),
-                    onPressed: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                onSubmitted: (_) => _login(),
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(height: 20),
 
-              // Error message
+              // Role selector
+              const Text('I am a...', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: _RoleCard(
+                      label: 'Runner',
+                      icon: Icons.directions_run,
+                      selected: _selectedRole == 'runner',
+                      onTap: () => setState(() => _selectedRole = 'runner'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _RoleCard(
+                      label: 'Organizer',
+                      icon: Icons.map,
+                      selected: _selectedRole == 'organizer',
+                      onTap: () => setState(() => _selectedRole = 'organizer'),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // Error
               if (_errorMessage != null)
                 Container(
                   width: double.infinity,
@@ -197,12 +233,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 24),
 
-              // Login button
+              // Register button
               SizedBox(
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: _isLoading ? null : _login,
+                  onPressed: _isLoading ? null : _register,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
@@ -220,7 +256,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ),
                         )
                       : const Text(
-                          'Login',
+                          'Create Account',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -229,25 +265,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
               ),
 
-              // ── Register link ────────────────────────────────
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
+
+              // Back to login
               Center(
                 child: TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const RegisterScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: () => Navigator.pop(context),
                   child: const Text.rich(
                     TextSpan(
-                      text: "Don't have an account? ",
+                      text: 'Already have an account? ',
                       style: TextStyle(color: Colors.grey),
                       children: [
                         TextSpan(
-                          text: 'Register',
+                          text: 'Login',
                           style: TextStyle(
                             color: Colors.blue,
                             fontWeight: FontWeight.bold,
@@ -258,55 +288,54 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
               ),
-              // ────────────────────────────────────────────────
-
-              // Temporary bypass buttons for testing
-              const SizedBox(height: 16),
-              const Divider(),
-              const SizedBox(height: 8),
-              const Center(
-                child: Text(
-                  'Quick test (remove before demo)',
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                const OrganizerDashboard(raceId: 'race1'),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.map, size: 16),
-                      label: const Text('Organizer'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const RunnerMapScreen(),
-                          ),
-                        );
-                      },
-                      icon: const Icon(Icons.directions_run, size: 16),
-                      label: const Text('Runner'),
-                    ),
-                  ),
-                ],
-              ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoleCard extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _RoleCard({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: selected ? Colors.blue : Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? Colors.blue : Colors.grey.shade300,
+            width: 2,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: selected ? Colors.white : Colors.grey, size: 28),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected ? Colors.white : Colors.grey,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
         ),
       ),
     );

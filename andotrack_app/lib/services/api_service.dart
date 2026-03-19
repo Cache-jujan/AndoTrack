@@ -42,6 +42,50 @@ class ApiService {
     }
   }
 
+  // ── Register storage ────────────────────────────────────
+  static Future<Map<String, dynamic>> register(
+  String name,
+  String email,
+  String password,
+  String role,
+) async {
+  try {
+    final response = await http
+        .post(
+          Uri.parse('${AppConfig.baseUrl}/auth/register'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'name': name,
+            'email': email,
+            'password': password,
+            'role': role,
+          }),
+        )
+        .timeout(AppConfig.requestTimeout);
+
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      return {
+        'success': true,
+        'token': data['access_token'],
+        'role': data['role'] ?? role,
+      };
+    } else {
+      return {
+        'success': false,
+        'message': data['detail'] ?? 'Registration failed.',
+      };
+    }
+  } on Exception catch (e) {
+    return {
+      'success': false,
+      'message': 'Cannot connect to server. Is FastAPI running?',
+    };
+  }
+}
+
+
   // ── Token storage ────────────────────────────────────
 
   static Future<void> saveToken(String token) async {
