@@ -35,3 +35,30 @@ def detect_checkpoint(
                 return None
 
     return None
+
+def validate_checkpoint_order(
+    db: Session,
+    runner_id: int,
+    checkpoint_order: int,
+    race_id: int
+) -> bool:
+    """
+    Returns True if runner has passed all previous checkpoints.
+    """
+    if checkpoint_order == 1:
+        return True  # First checkpoint, no previous needed
+
+    checkpoints = db.query(Checkpoint).filter(
+        Checkpoint.race_id == race_id,
+        Checkpoint.order_number < checkpoint_order
+    ).all()
+
+    for cp in checkpoints:
+        already_passed = db.query(RunnerCheckpoint).filter_by(
+            runner_id=runner_id,
+            checkpoint_id=cp.id
+        ).first()
+        if not already_passed:
+            return False  # Skipped a checkpoint
+
+    return True
