@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import get_db
 from models.race import Race, RaceRunner
@@ -14,7 +14,7 @@ class RaceRequest(BaseModel):
 
 @router.get("/")
 def get_races(db: Session = Depends(get_db), user = Depends(get_current_user)):
-    races = db.query(Race).all
+    races = db.query(Race).all()
     return races
 
 @router.post("/")
@@ -34,7 +34,7 @@ def get_race_runners(race_id: int, db:Session = Depends(get_db), user = Depends(
     #Check race exists
     race = db.query(Race).filter(Race.id == race_id).first()
     if not race:
-        raise HTTPEException(status_code=404, detail="Race not found")
+        raise HTTPException(status_code=404, detail="Race not found")
     
     race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
 
@@ -51,3 +51,48 @@ def get_race_runners(race_id: int, db:Session = Depends(get_db), user = Depends(
             })
         
     return result
+
+@router.post("/{race_id}/start")
+def start_race(race_id: int, db: Session = Depends(get_db), user = Depends (get_current_user)):
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail = "Race not found")
+    if race.status == "finished":
+        raise HTTPException(status_code=400, detail = "Race is already in progress")
+    
+    race.status = "active"
+    db.commit()
+    db.refresh(race)
+    return {"message": f"Race '{race.name}' has started!", "status": race.status}
+
+@router.post("/{race_id}/stop")
+def stop_race(race_id: int, db: Session = Depends(get_db), user = Depends (get_current_user)):
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail = "Race not found")
+    if race.status == "finished":
+        raise HTTPException(status_code=400, detail = "Race is already finished!")
+    
+    race.status = "finished"
+    db.commit()
+    db.refresh(race)
+    return {"message": f"Race '{race.name}' has finished!", "status": race.status}
+
+@router.get("/{race_id}/anomalies")
+def get_anomalies(
+    race_id: int,
+    runner_id: int = None,
+    resolved: bool = None,
+    db: Session = Depends(get_db),
+    user = Depends(get_current_user)
+):
+    from models.anomaly import Anomaly
+
+    query = db.query(Anomaly).filter(Anomaly.race_id == race_id)
+
+    if runner_id:
+        query = query.filter(Anomaly.runner_id == runner_id)
+    if resolved is not None:
+        query = query.filter(Anomaly.resolved == resolved)
+
+    return query.all()
