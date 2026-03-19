@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import '../services/firebase_service.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -12,6 +13,7 @@ class MapScreen extends StatefulWidget {
 class _MapScreenState extends State<MapScreen> {
   GoogleMapController? _mapController;
   Position? _currentPosition;
+  final FirebaseService _firebaseService = FirebaseService();
 
   @override
   void initState() {
@@ -27,7 +29,14 @@ class _MapScreenState extends State<MapScreen> {
       ),
     ).listen((Position position) {
       setState(() => _currentPosition = position);
-      // TODO: write to Firebase here
+      _firebaseService.updateRunnerLocation(
+        raceId: 'race1', // hardcoded for now :>
+        runnerId: 'test-runner-jan', // hardcoded for now :>
+        lat: position.latitude,
+        lng: position.longitude,
+        speed: position.speed,
+      );
+      print ("Sent to Firebase: ${position.latitude}, ${position.longitude}");
     });
   }
 
