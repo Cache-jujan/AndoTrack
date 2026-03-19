@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../services/firebase_service.dart';
 
 class MapScreen extends StatefulWidget {
@@ -18,10 +19,39 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    _initForegroundTask(); // sets up the foreground service
     _startTracking();
   }
 
-  void _startTracking() {
+  // Sets up the notification that keeps GPS alive when screen locks
+  void _initForegroundTask() {
+    FlutterForegroundTask.init(
+      androidNotificationOptions: AndroidNotificationOptions(
+        channelId: 'andotrack_gps',
+        channelName: 'AndoTrack GPS',
+        channelDescription: 'Keeps GPS running during your race',
+        channelImportance: NotificationChannelImportance.LOW,
+        priority: NotificationPriority.LOW,
+      ),
+      iosNotificationOptions: const IOSNotificationOptions(),
+      foregroundTaskOptions: ForegroundTaskOptions(
+        eventAction: ForegroundTaskEventAction.repeat(3000), // every 3 seconds
+        autoRunOnBoot: false,
+      ),
+    );
+  }
+
+  // Starts the foreground service (shows persistent notification)
+  Future<void> _startForegroundService() async {
+    await FlutterForegroundTask.startService(
+      notificationTitle: 'AndoTrack',
+      notificationText: 'GPS tracking your race...',
+    );
+  }
+
+  void _startTracking() async {
+    await _startForegroundService(); // start notification first
+
     Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
@@ -45,6 +75,13 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   @override
+  void dispose() {
+    // Stop the foreground service when screen is closed
+    FlutterForegroundTask.stopService();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     if (_currentLatLng == null) {
       return const Scaffold(
@@ -64,8 +101,6 @@ class _MapScreenState extends State<MapScreen> {
             urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
             userAgentPackageName: 'com.example.andotrack_app',
           ),
-
-          // 📍 Your location marker
           MarkerLayer(
             markers: [
               Marker(

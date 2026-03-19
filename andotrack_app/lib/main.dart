@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'firebase_options.dart';
-import 'screens/map_screen.dart';
+import 'screens/login_screen.dart';
+import 'screens/organizer_dashboard.dart';
+import 'screens/runner_map_screen.dart';
+import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
 
 void main() async {
@@ -20,8 +23,145 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'AndoTrack',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const MapScreen(),
+      home: const AuthGate(),
     );
+  }
+}
+
+// Checks stored JWT on startup and routes to the right screen
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkAndRequestLocation();
+      _checkExistingSession();
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAndRequestLocation();
+    }
+  }
+
+  // If a valid JWT is stored, skip login and go straight to the right screen
+  Future<void> _checkExistingSession() async {
+    final token = await ApiService.getToken();
+    final role = await ApiService.getRole();
+
+    if (token == null || role == null) return;
+    if (!mounted) return;
+
+    if (role == 'organizer') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const OrganizerDashboard(raceId: 'race1'),
+        ),
+      );
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+      );
+    }
+  }
+
+  Future<void> _checkAndRequestLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      await _showLocationServiceDialog();
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      await _showPermissionDeniedDialog();
+      return;
+    }
+
+    print('Location permission granted.');
+  }
+
+  Future<void> _showLocationServiceDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Location Required'),
+        content: const Text(
+          'AndoTrack needs your GPS to track race positions. '
+          'Please turn on Location Services.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await Geolocator.openLocationSettings();
+            },
+            child: const Text('Turn On'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showPermissionDeniedDialog() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Permission Denied'),
+        content: const Text(
+          'Location permission was denied. '
+          'Please enable it manually in App Settings.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await Geolocator.openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const LoginScreen();
   }
 }
