@@ -28,5 +28,5 @@ anomalies = pd.DataFrame({
 })
 
 df = pd.concat([normal, anomalies], ignore_index=True).sample(frac=1).reset_index(drop=True)
-df.to_csv('andotrack_api/ml/training_data.csv', index=False)
+df.to_csv('ml/training_data.csv', index=False)
 print(f"✅ Generated {len(df)} records → training_data.csv")
