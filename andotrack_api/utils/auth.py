@@ -26,6 +26,6 @@ def create_token(data: dict) -> str:
 def decode_token(token: str) -> dict:
     return jwt.decode(
         token,
-        os.getenv("JWT_SECRET"),
+        os.getenv("JWT_SECRET"), # type: ignore
         algorithms=[os.getenv("JWT_ALGORITHM", "HS256")]
     )
