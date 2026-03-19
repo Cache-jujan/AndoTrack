@@ -78,8 +78,16 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     );
   }
 
+  Color _accuracyColor(double accuracy) {
+    if (accuracy <= 10) return Colors.green;
+    if (accuracy <= 30) return Colors.orange;
+    return Colors.red;
+  }
+
   String _speedToKmh(double speedMs) {
-    return '${(speedMs * 3.6).toStringAsFixed(1)} km/h';
+    final kmh = speedMs * 3.6;
+    if (kmh < 0.5) return '0.0 km/h';  // ignore GPS noise
+    return '${kmh.toStringAsFixed(1)} km/h';
   }
 
   @override
@@ -227,7 +235,7 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
                           label: 'Accuracy',
                           value: '+/-${pos.accuracy.toStringAsFixed(0)}m',
                           icon: Icons.my_location,
-                          color: Colors.blue,
+                          color: _accuracyColor(pos.accuracy),
                         ),
                         _StatTile(
                           label: 'Status',
