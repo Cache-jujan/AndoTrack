@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>AndoTrack needs your location to track your position during a race.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>AndoTrack needs your location in the background to keep tracking during a race.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>AndoTrack needs your location in the background to keep tracking during a race.</string>
 </dict>
 </plist>
