@@ -18,11 +18,17 @@ class ApiService {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({'email': email, 'password': password}),
           )
-          .timeout(AppConfig.requestTimeout); 
+          .timeout(AppConfig.requestTimeout);
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
+        // Save token to shared_preferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', data['access_token']);
+        await prefs.setString('user_role', data['role'] ?? 'runner');
+        await prefs.setInt('user_id', data['user_id'] ?? 0);
+
         return {
           'success': true,
           'token': data['access_token'],
@@ -34,7 +40,50 @@ class ApiService {
           'message': data['detail'] ?? 'Invalid credentials.',
         };
       }
-    } on Exception catch (e) {
+    } on Exception {
+      return {
+        'success': false,
+        'message': 'Cannot connect to server. Is FastAPI running?',
+      };
+    }
+  }
+
+  // ── Register ────────────────────────────────────────
+  static Future<Map<String, dynamic>> register(
+    String name,
+    String email,
+    String password,
+    String role,
+  ) async {
+    try {
+      final response = await http
+          .post(
+            Uri.parse('${AppConfig.baseUrl}/auth/register'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'name': name,
+              'email': email,
+              'password': password,
+              'role': role,
+            }),
+          )
+          .timeout(AppConfig.requestTimeout);
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return {
+          'success': true,
+          'token': data['access_token'],
+          'role': data['role'] ?? role,
+        };
+      } else {
+        return {
+          'success': false,
+          'message': data['detail'] ?? 'Registration failed.',
+        };
+      }
+    } on Exception {
       return {
         'success': false,
         'message': 'Cannot connect to server. Is FastAPI running?',

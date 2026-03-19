@@ -1,49 +1,34 @@
 import 'dart:io';
 
-/// App configuration for environment-specific settings
 class AppConfig {
-  // -----------------------------
-  //  Environment URLs
-  // -----------------------------
+  // ── Set this when testing on mobile data via ngrok ────
+  // Get URL from: ngrok http 8000  →  copy the https://xxx.ngrok-free.app URL
+  // Set to null when testing on WiFi (uses local IP instead)
+  static const String? _ngrokUrl = null; // ← paste ngrok URL here when needed
 
-  /// Ngrok URL for mobile data testing
-  static const String? _ngrokUrl = null; // Example: 'https://your-ngrok-url.ngrok-free.dev'
-
-  /// Development base URL
   static String get _devBaseUrl {
+    // If ngrok URL is set, use it (mobile data testing)
     if (_ngrokUrl != null) {
       return _ngrokUrl!;
     }
 
-    // Local network for emulator or device
+    // Otherwise use local network (WiFi)
     if (Platform.isAndroid) {
-      return 'http://10.0.2.2:8000'; // Android emulator localhost
+      return 'http://10.0.2.2:8000';  // emulator
     } else if (Platform.isIOS) {
-      return 'http://localhost:8000'; // iOS simulator localhost
+      return 'http://localhost:8000';
     } else {
-      return 'http://192.168.1.100:8000'; // Replace with your dev machine IP
+      // TODO: Replace with your PC's IP from `ipconfig`
+      return 'http://YOUR_IP_HERE:8000';
     }
   }
 
-  /// Production base URL
   static const String _prodBaseUrl = 'https://your-app.railway.app';
-
-  /// Flag to toggle between dev and production
   static const bool isProduction = false;
-
-  /// The base URL to use depending on environment
   static String get baseUrl => isProduction ? _prodBaseUrl : _devBaseUrl;
 
-  // -----------------------------
-  //  API Paths
-  // -----------------------------
   static const String racesPath = 'races';
   static const String runnersPath = 'runners';
   static const String anomaliesPath = 'anomalies';
-
-  // -----------------------------
-  //  App-wide Settings
-  // -----------------------------
   static const Duration requestTimeout = Duration(seconds: 10);
-  static const bool useRemoteServer = true;
 }
