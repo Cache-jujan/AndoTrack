@@ -14,7 +14,7 @@ class RaceRequest(BaseModel):
 
 @router.get("/")
 def get_races(db: Session = Depends(get_db), user = Depends(get_current_user)):
-    races = db.query(Race).all
+    races = db.query(Race).all()
     return races
 
 @router.post("/")
@@ -34,7 +34,7 @@ def get_race_runners(race_id: int, db:Session = Depends(get_db), user = Depends(
     #Check race exists
     race = db.query(Race).filter(Race.id == race_id).first()
     if not race:
-        raise HTTPEException(status_code=404, detail="Race not found")
+        raise HTTPException(status_code=404, detail="Race not found")
     
     race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
 
@@ -57,7 +57,7 @@ def start_race(race_id: int, db: Session = Depends(get_db), user = Depends (get_
     race = db.query(Race).filter(Race.id == race_id).first()
     if not race:
         raise HTTPException(status_code=404, detail = "Race not found")
-    if race.status == "active":
+    if race.status == "finished":
         raise HTTPException(status_code=400, detail = "Race is already in progress")
     
     race.status = "active"
@@ -70,7 +70,7 @@ def stop_race(race_id: int, db: Session = Depends(get_db), user = Depends (get_c
     race = db.query(Race).filter(Race.id == race_id).first()
     if not race:
         raise HTTPException(status_code=404, detail = "Race not found")
-    if race.status == "active":
+    if race.status == "finished":
         raise HTTPException(status_code=400, detail = "Race is already finished!")
     
     race.status = "finished"
