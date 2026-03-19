@@ -46,7 +46,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'AndoTrack',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const LocationGate(), 
+      home: const LocationGate(),
     );
   }
 }
@@ -58,13 +58,30 @@ class LocationGate extends StatefulWidget {
   State<LocationGate> createState() => _LocationGateState();
 }
 
-class _LocationGateState extends State<LocationGate> {
+// 👇 Added WidgetsBindingObserver
+class _LocationGateState extends State<LocationGate> with WidgetsBindingObserver {
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // 👈 register observer
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkAndRequestLocation();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // 👈 clean up
+    super.dispose();
+  }
+
+  // 👇 Re-checks location every time user returns from Settings
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAndRequestLocation();
+    }
   }
 
   Future<void> _checkAndRequestLocation() async {
@@ -83,6 +100,9 @@ class _LocationGateState extends State<LocationGate> {
       await _showPermissionDeniedDialog();
       return;
     }
+
+    // ✅ Location is ready
+    print('✅ Location permission granted.');
   }
 
   Future<void> _showLocationServiceDialog() async {
@@ -103,7 +123,7 @@ class _LocationGateState extends State<LocationGate> {
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
-              await Geolocator.openLocationSettings(); 
+              await Geolocator.openLocationSettings();
             },
             child: const Text('Turn On'),
           ),
