@@ -10,6 +10,17 @@ import models.user
 import models.race
 import models.checkpoint
 import models.anomaly
+import pickle
+
+# Load ML model once on startup
+try:
+    with open("ml/anomaly_model.pkl", "rb") as f:
+        anomaly_model = pickle.load(f)
+    print("✅ Isolation Forest model loaded")
+except FileNotFoundError:
+    anomaly_model = None
+    print("⚠️ anomaly_model.pkl not found — run ml/train_model.py first")
+
 
 Base.metadata.create_all(bind=engine)
 
