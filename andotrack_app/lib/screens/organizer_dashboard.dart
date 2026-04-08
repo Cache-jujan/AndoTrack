@@ -1,556 +1,560 @@
+// ============================================================
+// ORGANIZER DASHBOARD — Full screen with all features:
+// Day 19: Start/Stop race controls
+// Day 21: Anomaly alerts overlay
+// Day 27: All runners on map with name labels + smooth movement
+// ============================================================
+
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
-import '../providers/race_runners_providers.dart';
-import '../models/runner_model.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/api_service.dart';
 import '../widgets/app_bottom_nav.dart';
-import 'settings_screen.dart';
-import 'checkpoint_placement_screen.dart';
-import '../services/checkpoint_service.dart';
+import '../screens/leaderboard_screen.dart';
+import '../screens/races_screen.dart';
+import '../screens/settings_screen.dart';
+import '../screens/checkpoint_placement_screen.dart';
+import '../widgets/anomaly_alert_widget.dart';
 
-class OrganizerDashboard extends ConsumerStatefulWidget {
-  final String raceId;
+// Runner colors — up to 10 distinct runners
+const _runnerColors = [
+  Color(0xFF00FF9C),
+  Color(0xFF00B4FF),
+  Color(0xFFFFB800),
+  Color(0xFFFF4D9D),
+  Color(0xFFB44DFF),
+  Color(0xFFFF6B35),
+  Color(0xFF4DFFEA),
+  Color(0xFFFF4D4D),
+  Color(0xFFFFFF4D),
+  Color(0xFF4DFF4D),
+];
 
-  const OrganizerDashboard({super.key, required this.raceId});
+class OrganizerDashboard extends StatefulWidget {
+  const OrganizerDashboard({super.key});
 
   @override
-  ConsumerState<OrganizerDashboard> createState() => _OrganizerDashboardState();
+  State<OrganizerDashboard> createState() => _OrganizerDashboardState();
 }
 
-class _OrganizerDashboardState extends ConsumerState<OrganizerDashboard> {
+class _OrganizerDashboardState extends State<OrganizerDashboard> {
+  NavTab _tab = NavTab.map;
   final MapController _mapController = MapController();
-  bool _followFirstRunner = true;
-  NavTab _currentTab = NavTab.map;
-  List<Map<String, dynamic>> _checkpoints = []; // ← added
 
-  static const String _darkTileUrl =
-      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+  final Map<String, _RunnerState> _runners = {};
+  final Map<String, LatLng> _smoothPositions = {};
+
+  int _raceId = 1;
+  String? _raceName;
+  String _raceStatus = 'upcoming';
+  bool _actionLoading = false;
+
+  StreamSubscription? _firebaseSub;
+  Timer? _smoothTimer;
 
   @override
   void initState() {
     super.initState();
-    _loadCheckpoints(); // ← added
-    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-    ));
+    _loadRace();
   }
 
-  // ── Load checkpoints from API ─────────────────────────
-  Future<void> _loadCheckpoints() async {
-    final data = await CheckpointService.getCheckpoints(
-      int.tryParse(widget.raceId) ?? 1,
+  Future<void> _loadRace() async {
+    final prefs = await SharedPreferences.getInstance();
+    _raceId = prefs.getInt('active_race_id') ?? 1;
+
+    try {
+      final races = await ApiService.getRaces();
+      if (races.isNotEmpty) {
+        final race = races.firstWhere(
+          (r) => r['id'] == _raceId,
+          orElse: () => races.first,
+        );
+        setState(() {
+          _raceId = race['id'];
+          _raceName = race['name'];
+          _raceStatus = race['status'] ?? 'upcoming';
+        });
+        await prefs.setInt('active_race_id', _raceId);
+      }
+    } catch (_) {}
+
+    _listenToRunners();
+    _startSmoothMovement();
+  }
+
+  void _listenToRunners() {
+    _firebaseSub?.cancel();
+    FirebaseDatabase.instance
+        .ref('races/$_raceId/runners')
+        .onValue
+        .listen((event) {
+      if (!mounted || event.snapshot.value == null) return;
+      final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+
+      setState(() {
+        data.forEach((runnerId, value) {
+          final d = Map<String, dynamic>.from(value);
+          final lat = (d['lat'] as num?)?.toDouble();
+          final lng = (d['lng'] as num?)?.toDouble();
+          if (lat == null || lng == null) return;
+
+          if (!_runners.containsKey(runnerId)) {
+            _runners[runnerId] = _RunnerState(
+              id: runnerId,
+              name: d['name'] ?? 'Runner #$runnerId',
+              color: _runnerColors[_runners.length % _runnerColors.length],
+              position: LatLng(lat, lng),
+              speed: (d['speed'] as num?)?.toDouble() ?? 0,
+            );
+            _smoothPositions[runnerId] = LatLng(lat, lng);
+          } else {
+            _runners[runnerId] = _runners[runnerId]!.copyWith(
+              targetPosition: LatLng(lat, lng),
+              speed: (d['speed'] as num?)?.toDouble() ?? 0,
+              name: d['name'] ?? _runners[runnerId]!.name,
+            );
+          }
+        });
+      });
+    });
+  }
+
+  void _startSmoothMovement() {
+    _smoothTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted) return;
+      bool changed = false;
+      _runners.forEach((id, runner) {
+        final target = runner.targetPosition ?? runner.position;
+        final current = _smoothPositions[id] ?? runner.position;
+        final lat = _lerp(current.latitude, target.latitude, 0.3);
+        final lng = _lerp(current.longitude, target.longitude, 0.3);
+        final newPos = LatLng(lat, lng);
+        if ((newPos.latitude - current.latitude).abs() > 0.000001 ||
+            (newPos.longitude - current.longitude).abs() > 0.000001) {
+          _smoothPositions[id] = newPos;
+          changed = true;
+        }
+      });
+      if (changed && mounted) setState(() {});
+    });
+  }
+
+  double _lerp(double a, double b, double t) => a + (b - a) * t;
+
+  Future<void> _startRace() async {
+    final confirm = await _showConfirm(
+      'Start Race',
+      'Start "${_raceName ?? 'Race #$_raceId'}"?',
+      'Start',
+      const Color(0xFF00FF9C),
     );
-    setState(() => _checkpoints = data.cast<Map<String, dynamic>>());
-  }
-
-  String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
-    final s = dt.second.toString().padLeft(2, '0');
-    return '$h:$m:$s';
-  }
-
-  void _panToFirstRunner(List<RunnerModel> runners) {
-    if (_followFirstRunner && runners.isNotEmpty) {
-      _mapController.move(
-        LatLng(runners.first.lat, runners.first.lng),
-        16.0,
-      );
-      _followFirstRunner = false;
+    if (!confirm) return;
+    setState(() => _actionLoading = true);
+    try {
+      await ApiService.startRace(_raceId);
+      setState(() => _raceStatus = 'active');
+      _showSnack('Race started! 🏁', const Color(0xFF00FF9C));
+    } catch (e) {
+      _showSnack('Failed: $e', const Color(0xFFFF4D4D));
+    } finally {
+      setState(() => _actionLoading = false);
     }
   }
 
-  Color _runnerColor(int index) {
-    const colors = [
-      Color(0xFF00FF9C),
-      Color(0xFF00B4FF),
-      Color(0xFFFFB800),
-      Color(0xFFFF4D9E),
-      Color(0xFFBD00FF),
-    ];
-    return colors[index % colors.length];
+  Future<void> _stopRace() async {
+    final confirm = await _showConfirm(
+      'Stop Race',
+      'End "${_raceName ?? 'Race #$_raceId'}"? This ends the race for all runners.',
+      'Stop',
+      const Color(0xFFFF4D4D),
+    );
+    if (!confirm) return;
+    setState(() => _actionLoading = true);
+    try {
+      await ApiService.stopRace(_raceId);
+      setState(() => _raceStatus = 'finished');
+      _showSnack('Race finished!', const Color(0xFFFFB800));
+    } catch (e) {
+      _showSnack('Failed: $e', const Color(0xFFFF4D4D));
+    } finally {
+      setState(() => _actionLoading = false);
+    }
   }
 
-  Widget _buildMapView(List<RunnerModel> runners) {
+  Future<bool> _showConfirm(
+      String title, String msg, String action, Color color) async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            backgroundColor: const Color(0xFF0D0D14),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            title: Text(title,
+                style: const TextStyle(color: Colors.white, fontSize: 16)),
+            content: Text(msg,
+                style: const TextStyle(
+                    color: Color(0xFF888899), fontSize: 13)),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel',
+                    style: TextStyle(color: Color(0xFF666680))),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: color,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(action,
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
+  void _showSnack(String msg, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: const TextStyle(color: Colors.black)),
+      backgroundColor: color,
+      duration: const Duration(seconds: 3),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0A0F),
+      body: IndexedStack(
+        index: _tab.index,
+        children: [
+          _buildMap(),
+          LeaderboardScreen(raceId: _raceId),
+          RacesScreen(onRaceSelected: (id, name, status) {
+            setState(() {
+              _raceId = id;
+              _raceName = name;
+              _raceStatus = status;
+              _tab = NavTab.map;
+            });
+            _listenToRunners();
+          }),
+          const SettingsScreen(),
+        ],
+      ),
+      bottomNavigationBar: AppBottomNav(
+        current: _tab,
+        onTap: (t) => setState(() => _tab = t),
+      ),
+      floatingActionButton: _tab == NavTab.map
+          ? FloatingActionButton(
+              backgroundColor: const Color(0xFF00FF9C),
+              foregroundColor: Colors.black,
+              child: const Icon(Icons.add_location_alt),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CheckpointPlacementScreen(raceId: _raceId),
+                ),
+              ),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildMap() {
     return Stack(
       children: [
         FlutterMap(
           mapController: _mapController,
           options: const MapOptions(
             initialCenter: LatLng(10.3157, 123.8854),
-            initialZoom: 14,
+            initialZoom: 15,
           ),
           children: [
             TileLayer(
-              urlTemplate: _darkTileUrl,
+              urlTemplate:
+                  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
               subdomains: const ['a', 'b', 'c', 'd'],
-              userAgentPackageName: 'com.example.andotrack_app',
             ),
-
-            // ── Checkpoint radius circles ─────────────────
-            CircleLayer(
-              circles: _checkpoints.map((cp) => CircleMarker(
-                point: LatLng(
-                  (cp['lat'] as num).toDouble(),
-                  (cp['lng'] as num).toDouble(),
-                ),
-                radius: (cp['radius_meters'] as num).toDouble(),
-                color: const Color(0xFF00B4FF).withOpacity(0.1),
-                borderColor: const Color(0xFF00B4FF).withOpacity(0.5),
-                borderStrokeWidth: 1.5,
-                useRadiusInMeter: true,
-              )).toList(),
-            ),
-
-            // ── Checkpoint markers ────────────────────────
             MarkerLayer(
-              markers: _checkpoints.asMap().entries.map((entry) {
-                final index = entry.key;
-                final cp = entry.value;
+              markers: _runners.entries.map((e) {
+                final pos = _smoothPositions[e.key] ?? e.value.position;
                 return Marker(
-                  point: LatLng(
-                    (cp['lat'] as num).toDouble(),
-                    (cp['lng'] as num).toDouble(),
-                  ),
-                  width: 48,
-                  height: 56,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 28,
-                        height: 28,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF00B4FF),
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF00B4FF).withOpacity(0.5),
-                              blurRadius: 8,
-                            ),
-                          ],
-                        ),
-                        child: Center(
-                          child: Text(
-                            '${index + 1}',
-                            style: const TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 12,
-                            ),
-                          ),
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 5, vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0D0D14),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(
-                            color: const Color(0xFF00B4FF).withOpacity(0.3),
-                          ),
-                        ),
-                        child: Text(
-                          cp['name'] ?? '',
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-
-            // ── Runner markers ────────────────────────────
-            MarkerLayer(
-              markers: runners.asMap().entries.map((entry) {
-                final index = entry.key;
-                final runner = entry.value;
-                final color = _runnerColor(index);
-                return Marker(
-                  point: LatLng(runner.lat, runner.lng),
-                  width: 72,
-                  height: 72,
-                  child: GestureDetector(
-                    onTap: () => _showRunnerDialog(runner, color),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: color.withOpacity(0.1),
-                            border: Border.all(
-                              color: color.withOpacity(0.4),
-                              width: 1.5,
-                            ),
-                          ),
-                        ),
-                        Container(
-                          width: 24,
-                          height: 24,
-                          decoration: BoxDecoration(
-                            color: color,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: color.withOpacity(0.6),
-                                blurRadius: 8,
-                                spreadRadius: 1,
-                              ),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${index + 1}',
-                              style: const TextStyle(
-                                color: Colors.black,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  point: pos,
+                  width: 120,
+                  height: 52,
+                  child: _RunnerMarker(runner: e.value),
                 );
               }).toList(),
             ),
           ],
         ),
 
-        // Top gradient
+        // Day 21: Anomaly alerts
+        AnomalyAlertOverlay(raceId: _raceId),
+
+        // Day 19: Race control panel
         Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 110,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  const Color(0xFF0A0A0F).withOpacity(0.95),
-                  Colors.transparent,
-                ],
-              ),
-            ),
+          top: MediaQuery.of(context).padding.top + 12,
+          left: 12,
+          child: _RaceControlPanel(
+            raceName: _raceName ?? 'Race #$_raceId',
+            status: _raceStatus,
+            runnerCount: _runners.length,
+            loading: _actionLoading,
+            onStart: _raceStatus == 'upcoming' ? _startRace : null,
+            onStop: _raceStatus == 'active' ? _stopRace : null,
           ),
         ),
-
-        // Runner count badge
-        Positioned(
-          top: 12,
-          left: 16,
-          child: SafeArea(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D0D14),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withOpacity(0.08)),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 8),
-                ],
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.directions_run_rounded, size: 15, color: Color(0xFF00FF9C)),
-                  const SizedBox(width: 6),
-                  Text(
-                    runners.isEmpty ? 'Waiting for runners...' : '${runners.length} active',
-                    style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-
-        // Recenter button
-        Positioned(
-          right: 16,
-          top: 12,
-          child: SafeArea(
-            child: GestureDetector(
-              onTap: () {
-                setState(() => _followFirstRunner = true);
-                final runners = ref.read(raceRunnersProvider(widget.raceId)).valueOrNull ?? [];
-                _panToFirstRunner(runners);
-              },
-              child: Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0D0D14),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.white.withOpacity(0.08)),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 8),
-                  ],
-                ),
-                child: const Icon(Icons.my_location_rounded, color: Color(0xFF00FF9C), size: 20),
-              ),
-            ),
-          ),
-        ),
-
-        // Runner list panel
-        if (runners.isNotEmpty)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              constraints: const BoxConstraints(maxHeight: 220),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D0D14),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(top: BorderSide(color: Colors.white.withOpacity(0.07))),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 20)],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    margin: const EdgeInsets.only(top: 10, bottom: 4),
-                    width: 36,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    child: Row(
-                      children: [
-                        Text('RUNNERS', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w700)),
-                        const Spacer(),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(color: const Color(0xFF00FF9C).withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-                          child: Text('${runners.length}', style: const TextStyle(color: Color(0xFF00FF9C), fontSize: 11, fontWeight: FontWeight.bold)),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Flexible(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      itemCount: runners.length,
-                      itemBuilder: (context, index) {
-                        final runner = runners[index];
-                        final color = _runnerColor(index);
-                        return GestureDetector(
-                          onTap: () => _mapController.move(LatLng(runner.lat, runner.lng), 17.0),
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 8),
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: color.withOpacity(0.05),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: color.withOpacity(0.15)),
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 28, height: 28,
-                                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                                  child: Center(child: Text('${index + 1}', style: const TextStyle(color: Colors.black, fontSize: 11, fontWeight: FontWeight.bold))),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text('Runner ${index + 1}', style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600, fontSize: 13)),
-                                      Text('${runner.lat.toStringAsFixed(4)}, ${runner.lng.toStringAsFixed(4)}', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 11, fontFamily: 'monospace')),
-                                    ],
-                                  ),
-                                ),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                  children: [
-                                    Text('${(runner.speed * 3.6).toStringAsFixed(1)} km/h', style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.bold)),
-                                    Text(_formatTime(runner.lastUpdated), style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 10)),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-        // Empty state
-        if (runners.isEmpty)
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D0D14),
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-                border: Border(top: BorderSide(color: Colors.white.withOpacity(0.07))),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: const Color(0xFF00FF9C).withOpacity(0.6))),
-                  const SizedBox(width: 12),
-                  Text('Waiting for runners to join...', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 13)),
-                ],
-              ),
-            ),
-          ),
       ],
     );
   }
 
-  void _showRunnerDialog(RunnerModel runner, Color color) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        backgroundColor: const Color(0xFF0D0D14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: color.withOpacity(0.3))),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(width: 36, height: 36, decoration: BoxDecoration(color: color, shape: BoxShape.circle), child: const Icon(Icons.directions_run, color: Colors.black, size: 18)),
-                  const SizedBox(width: 12),
-                  Text(runner.runnerId, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _DialogRow(label: 'Latitude', value: runner.lat.toStringAsFixed(6), color: color),
-              _DialogRow(label: 'Longitude', value: runner.lng.toStringAsFixed(6), color: color),
-              _DialogRow(label: 'Speed', value: '${(runner.speed * 3.6).toStringAsFixed(1)} km/h', color: color),
-              _DialogRow(label: 'Updated', value: _formatTime(runner.lastUpdated), color: color),
-              const SizedBox(height: 16),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  style: TextButton.styleFrom(backgroundColor: color.withOpacity(0.1), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
-                  child: Text('Close', style: TextStyle(color: color)),
-                ),
+  @override
+  void dispose() {
+    _firebaseSub?.cancel();
+    _smoothTimer?.cancel();
+    super.dispose();
+  }
+}
+
+// ─── RUNNER MARKER ─────────────────────────────────────────────────────────
+class _RunnerMarker extends StatelessWidget {
+  final _RunnerState runner;
+  const _RunnerMarker({required this.runner});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D14).withOpacity(0.9),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+                color: runner.color.withOpacity(0.6), width: 1),
+          ),
+          child: Text(
+            runner.name,
+            style: TextStyle(
+              color: runner.color,
+              fontSize: 10,
+              fontWeight: FontWeight.bold,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Container(
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: runner.color,
+            boxShadow: [
+              BoxShadow(
+                color: runner.color.withOpacity(0.5),
+                blurRadius: 8,
+                spreadRadius: 1,
               ),
             ],
           ),
         ),
-      ),
+      ],
     );
+  }
+}
+
+// ─── RACE CONTROL PANEL ───────────────────────────────────────────────────
+class _RaceControlPanel extends StatelessWidget {
+  final String raceName;
+  final String status;
+  final int runnerCount;
+  final bool loading;
+  final VoidCallback? onStart;
+  final VoidCallback? onStop;
+
+  const _RaceControlPanel({
+    required this.raceName,
+    required this.status,
+    required this.runnerCount,
+    required this.loading,
+    this.onStart,
+    this.onStop,
+  });
+
+  Color get _statusColor {
+    switch (status) {
+      case 'active':
+        return const Color(0xFF00FF9C);
+      case 'finished':
+        return const Color(0xFFFF4D4D);
+      default:
+        return const Color(0xFFFFB800);
+    }
+  }
+
+  String get _statusLabel {
+    switch (status) {
+      case 'active':
+        return '● LIVE';
+      case 'finished':
+        return '■ FINISHED';
+      default:
+        return '○ UPCOMING';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final runnersAsync = ref.watch(raceRunnersProvider(widget.raceId));
-
-    return Scaffold(
-      backgroundColor: const Color(0xFF0A0A0F),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0A0A0F),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('AndoTrack', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 0.5)),
-            Text('Race ${widget.raceId} · Live', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 11)),
-          ],
-        ),
-        systemOverlayStyle: const SystemUiOverlayStyle(statusBarBrightness: Brightness.dark),
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 200),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D14).withOpacity(0.95),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF1E1E30), width: 1),
       ),
-      floatingActionButton: _currentTab == NavTab.map
-          ? FloatingActionButton(
-              backgroundColor: const Color(0xFF00B4FF),
-              tooltip: 'Place Checkpoints',
-              child: const Icon(Icons.flag_rounded, color: Colors.black),
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => CheckpointPlacementScreen(
-                      raceId: int.tryParse(widget.raceId) ?? 1,
-                    ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            raceName,
+            style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.bold),
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Text(_statusLabel,
+                  style: TextStyle(
+                      color: _statusColor,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1)),
+              const Spacer(),
+              Text('👟 $runnerCount',
+                  style: const TextStyle(
+                      color: Color(0xFF888899), fontSize: 10)),
+            ],
+          ),
+          if (onStart != null || onStop != null) ...[
+            const SizedBox(height: 8),
+            if (loading)
+              const Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF00FF9C),
                   ),
-                );
-                _loadCheckpoints(); // ← reload after returning
-              },
-            )
-          : null,
-      body: _currentTab == NavTab.settings
-          ? const SettingsScreen()
-          : runnersAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator(color: Color(0xFF00FF9C), strokeWidth: 2)),
-              error: (err, _) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.error_outline_rounded, size: 48, color: Color(0xFFFF4D4D)),
-                    const SizedBox(height: 12),
-                    Text('Error: $err', textAlign: TextAlign.center, style: const TextStyle(color: Colors.white38)),
-                  ],
                 ),
+              )
+            else if (onStart != null)
+              _ActionButton(
+                label: 'Start Race',
+                color: const Color(0xFF00FF9C),
+                icon: Icons.play_arrow,
+                onTap: onStart!,
+              )
+            else if (onStop != null)
+              _ActionButton(
+                label: 'Stop Race',
+                color: const Color(0xFFFF4D4D),
+                icon: Icons.stop,
+                onTap: onStop!,
               ),
-              data: (runners) {
-                WidgetsBinding.instance.addPostFrameCallback((_) => _panToFirstRunner(runners));
-                return _buildMapView(runners);
-              },
-            ),
-      bottomNavigationBar: AppBottomNav(
-        currentTab: _currentTab,
-        onTabSelected: (tab) => setState(() => _currentTab = tab),
+          ],
+        ],
       ),
     );
   }
 }
 
-class _DialogRow extends StatelessWidget {
+class _ActionButton extends StatelessWidget {
   final String label;
-  final String value;
   final Color color;
+  final IconData icon;
+  final VoidCallback onTap;
 
-  const _DialogRow({required this.label, required this.value, required this.color});
+  const _ActionButton(
+      {required this.label,
+      required this.color,
+      required this.icon,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 12)),
-          Text(value, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600, fontFamily: 'monospace')),
-        ],
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.4), width: 1),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 14),
+            const SizedBox(width: 6),
+            Text(label,
+                style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold)),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+// ─── DATA CLASS ────────────────────────────────────────────────────────────
+class _RunnerState {
+  final String id;
+  final String name;
+  final Color color;
+  final LatLng position;
+  final LatLng? targetPosition;
+  final double speed;
+
+  _RunnerState({
+    required this.id,
+    required this.name,
+    required this.color,
+    required this.position,
+    this.targetPosition,
+    this.speed = 0,
+  });
+
+  _RunnerState copyWith(
+      {LatLng? targetPosition, double? speed, String? name}) {
+    return _RunnerState(
+      id: id,
+      name: name ?? this.name,
+      color: color,
+      position: position,
+      targetPosition: targetPosition ?? this.targetPosition,
+      speed: speed ?? this.speed,
     );
   }
 }

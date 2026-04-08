@@ -39,7 +39,6 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
-
   @override
   void initState() {
     super.initState();
@@ -63,7 +62,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  // If a valid JWT is stored, skip login and go straight to the right screen
   Future<void> _checkExistingSession() async {
     final token = await ApiService.getToken();
     final role = await ApiService.getRole();
@@ -75,7 +73,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => const OrganizerDashboard(raceId: 'race1'),
+          builder: (_) => const OrganizerDashboard(),
         ),
       );
     } else {
@@ -102,8 +100,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       await _showPermissionDeniedDialog();
       return;
     }
-
-    print('Location permission granted.');
   }
 
   Future<void> _showLocationServiceDialog() async {
