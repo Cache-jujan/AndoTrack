@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import 'organizer_dashboard.dart';
 import 'runner_map_screen.dart';
-import 'register_screen.dart'; // ← added
+import 'register_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -48,19 +48,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         final token = result['token'] as String;
         final role = result['role'] as String;
 
-        // Store JWT in shared_preferences
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('jwt_token', token);
         await prefs.setString('user_role', role);
-
+        await prefs.setInt('user_id', result['user_id']);
+        await prefs.setString('user_name', result['name']);
         if (!mounted) return;
 
-        // Role-based navigation
         if (role == 'organizer') {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (_) => const OrganizerDashboard(raceId: 'race1'),
+              builder: (_) => const OrganizerDashboard(),
             ),
           );
         } else {
@@ -75,7 +74,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         setState(() => _errorMessage = result['message'] ?? 'Login failed.');
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Connection error. Is the server running?');
+      setState(
+          () => _errorMessage = 'Connection error. Is the server running?');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -91,7 +91,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo / Title
               const SizedBox(height: 32),
               Center(
                 child: Column(
@@ -128,11 +127,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 48),
 
-              // Email field
-              const Text(
-                'Email',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+              const Text('Email',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _emailController,
@@ -148,11 +144,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 20),
 
-              // Password field
-              const Text(
-                'Password',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+              const Text('Password',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _passwordController,
@@ -179,7 +172,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 12),
 
-              // Error message
               if (_errorMessage != null)
                 Container(
                   width: double.infinity,
@@ -197,7 +189,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 24),
 
-              // Login button
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -229,7 +220,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
               ),
 
-              // ── Register link ────────────────────────────────
               const SizedBox(height: 16),
               Center(
                 child: TextButton(
@@ -258,7 +248,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                 ),
               ),
-              // ────────────────────────────────────────────────
 
               // Temporary bypass buttons for testing
               const SizedBox(height: 16),
@@ -279,8 +268,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                const OrganizerDashboard(raceId: 'race1'),
+                            builder: (_) => const OrganizerDashboard(),
                           ),
                         );
                       },
