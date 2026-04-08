@@ -3,6 +3,8 @@ import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'organizer_dashboard.dart';
 import 'runner_map_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'race_join_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -56,9 +58,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (result['success'] == true) {
         final token = result['token'] as String;
         final role = result['role'] as String;
-
-        await ApiService.saveToken(token);
-        await ApiService.saveRole(role);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', token);
+        await prefs.setString('user_role', role);
+        await prefs.setInt('user_id', result['user_id']);
+        await prefs.setString('user_name', result['name']);
+        
 
         if (!mounted) return;
 
@@ -72,7 +77,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+            MaterialPageRoute(builder: (_) => const RaceJoinScreen()),
           );
         }
       } else {

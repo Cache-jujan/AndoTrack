@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
 class ApiService {
-  static String get _base => AppConfig.apiBaseUrl;
+  static String get _base => AppConfig.baseUrl; 
 
   // ── Auth ──────────────────────────────────────────────────
 
