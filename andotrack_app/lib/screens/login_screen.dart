@@ -3,9 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import 'organizer_dashboard.dart';
-import 'runner_map_screen.dart';
+import 'runner_dashboard_screen.dart';
 import 'register_screen.dart';
-import 'race_join_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -59,16 +58,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         if (role == 'organizer') {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const OrganizerDashboard(),
-            ),
+            MaterialPageRoute(builder: (_) => const OrganizerDashboard()),
           );
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const RaceJoinScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
           );
         }
       } else {
@@ -160,9 +155,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ? Icons.visibility_off
                           : Icons.visibility,
                     ),
-                    onPressed: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -199,39 +193,29 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _isLoading
                       ? const SizedBox(
                           width: 24,
                           height: 24,
                           child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
+                              color: Colors.white, strokeWidth: 2),
                         )
-                      : const Text(
-                          'Login',
+                      : const Text('Login',
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                              fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
               ),
 
               const SizedBox(height: 16),
               Center(
                 child: TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const RegisterScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const RegisterScreen()),
+                  ),
                   child: const Text.rich(
                     TextSpan(
                       text: "Don't have an account? ",
@@ -240,9 +224,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         TextSpan(
                           text: 'Register',
                           style: TextStyle(
-                            color: Colors.blue,
-                            fontWeight: FontWeight.bold,
-                          ),
+                              color: Colors.blue,
+                              fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -250,7 +233,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 ),
               ),
 
-              // Temporary bypass buttons for testing
+              // Quick test bypass
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
@@ -265,14 +248,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const OrganizerDashboard(),
-                          ),
-                        );
-                      },
+                      onPressed: () => Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const OrganizerDashboard()),
+                      ),
                       icon: const Icon(Icons.map, size: 16),
                       label: const Text('Organizer'),
                     ),
@@ -280,14 +260,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const RaceJoinScreen(),
-                          ),
-                        );
-                      },
+                      onPressed: () => Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const RunnerDashboardScreen()),
+                      ),
                       icon: const Icon(Icons.directions_run, size: 16),
                       label: const Text('Runner'),
                     ),
