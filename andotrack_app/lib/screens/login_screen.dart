@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import 'organizer_dashboard.dart';
 import 'runner_map_screen.dart';
 import 'register_screen.dart';
+import 'race_join_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -66,7 +67,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (_) => const RunnerMapScreen(),
+              builder: (_) => const RaceJoinScreen(),
             ),
           );
         }
@@ -283,7 +284,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         Navigator.pushReplacement(
                           context,
                           MaterialPageRoute(
-                            builder: (_) => const RunnerMapScreen(),
+                            builder: (_) => const RaceJoinScreen(),
                           ),
                         );
                       },
