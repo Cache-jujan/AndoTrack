@@ -7,12 +7,15 @@ import 'screens/organizer_dashboard.dart';
 import 'screens/runner_map_screen.dart';
 import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'services/notification_service.dart';
+import 'screens/race_list_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await NotificationService.init();
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -79,7 +82,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+        MaterialPageRoute(builder: (_) => const RaceListScreen()),
       );
     }
   }

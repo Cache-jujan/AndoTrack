@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'organizer_dashboard.dart';
-import 'runner_map_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'race_join_screen.dart';
+import 'race_list_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -77,7 +76,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const RaceJoinScreen()),
+            MaterialPageRoute(builder: (_) => const RaceListScreen()),
           );
         }
       } else {
