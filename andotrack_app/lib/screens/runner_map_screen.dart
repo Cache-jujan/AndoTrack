@@ -10,6 +10,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
 import 'runner_dashboard_screen.dart';
 import 'settings_screen.dart';
+import '../services/notification_service.dart';
 
 class RunnerMapScreen extends StatefulWidget {
   const RunnerMapScreen({super.key});
@@ -237,7 +238,7 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     });
   }
 
-  void _checkCheckpointProximity(Position pos) {
+void _checkCheckpointProximity(Position pos) {
     final next = _nextCheckpoint;
     if (next == null) return;
     final dist = Geolocator.distanceBetween(
@@ -247,12 +248,12 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
       FirebaseDatabase.instance
           .ref('races/$_raceId/runner_checkpoints/$_runnerId/${next.id}')
           .set(DateTime.now().toIso8601String());
-      ApiService.arriveAtCheckpoint(next.id, _runnerId!);
 
-      // Arrival toast + haptic
+      ApiService.arriveAtCheckpoint(next.id, _runnerId!);
+      NotificationService.showCheckpointPassed(next.name);
+
       HapticFeedback.mediumImpact();
-      final remaining =
-          _checkpoints.length - _passedCheckpointIds.length - 1;
+      final remaining = _checkpoints.length - _passedCheckpointIds.length - 1;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -268,15 +269,13 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
                 if (remaining > 0)
                   Text(
                     '  ·  $remaining remaining',
-                    style: const TextStyle(
-                        color: Colors.black54, fontSize: 12),
+                    style: const TextStyle(color: Colors.black54, fontSize: 12),
                   ),
               ],
             ),
             backgroundColor: const Color(0xFF00FF9C),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             duration: const Duration(seconds: 3),
           ),
         );
