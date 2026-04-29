@@ -15,7 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
 class ApiService {
-  static String get _base => AppConfig.baseUrl;
+  static const String _base = 'https://andotrack-production.up.railway.app';
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
