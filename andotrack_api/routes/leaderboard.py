@@ -1,28 +1,32 @@
-from fastapi import APIRouter
-from firebase_admin import db
+# andotrack_api/routes/leaderboard.py
+
+from fastapi import APIRouter, HTTPException
+import firebase_admin.db as firebase_db
 
 router = APIRouter()
 
-@router.get("/{race_id}")
+@router.get("/leaderboard/{race_id}")
 def get_leaderboard(race_id: int):
+    try:
+        ref = firebase_db.reference(f"/races/{race_id}/runners")
+        runners_data = ref.get()
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Leaderboard temporarily unavailable: {str(e)}"
+        )
 
-    ref = db.reference(f"races/{race_id}/runners")
-    runners = ref.get()
-
-    if not runners:
+    if not runners_data:
         return {"leaderboard": []}
 
     leaderboard = []
-
-    for runner_id, data in runners.items():
+    for runner_id, data in runners_data.items():
         leaderboard.append({
             "runner_id": runner_id,
             "speed": data.get("speed", 0),
-            "lat": data.get("lat"),
-            "lng": data.get("lng"),
-            "timestamp": data.get("timestamp")
+            # add other fields your app expects
         })
 
+    # Sort by speed descending
     leaderboard.sort(key=lambda x: x["speed"], reverse=True)
-
     return {"leaderboard": leaderboard}

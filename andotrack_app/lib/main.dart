@@ -8,7 +8,7 @@ import 'screens/runner_map_screen.dart';
 import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'services/notification_service.dart';
-import 'screens/race_list_screen.dart';
+import 'screens/runner_dashboard_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -82,7 +82,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RaceListScreen()),
+        MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
       );
     }
   }

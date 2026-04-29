@@ -3,7 +3,7 @@ import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'organizer_dashboard.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'race_list_screen.dart';
+import 'runner_dashboard_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -76,7 +76,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const RaceListScreen()),
+            MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
           );
         }
       } else {

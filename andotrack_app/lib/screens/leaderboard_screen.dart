@@ -1,3 +1,16 @@
+// ============================================================
+// LeaderboardScreen — Organizer/embedded view
+// ─────────────────────────────────────────────────────────────
+// • Polls /leaderboard/{raceId} every 5 seconds (silent)
+// • Displays rank, runner name (falls back to Runner #id),
+//   speed (km/h), pace (/km), distance (if returned by API),
+//   checkpoints hit (if returned by API)
+// • Tap a row → bottom sheet with full runner detail
+// • Live dot animation in header
+// • Empty / error / loading states
+// ============================================================
+
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
@@ -14,31 +27,47 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
   List<Map<String, dynamic>> _leaderboard = [];
   bool _isLoading = true;
   String? _error;
+  Timer? _pollTimer;
+  DateTime? _lastUpdated;
+
+  static const _pollInterval = Duration(seconds: 5);
 
   @override
   void initState() {
     super.initState();
     _load();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _load(silent: true));
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) setState(() { _isLoading = true; _error = null; });
     try {
       final data = await ApiService.getLeaderboard(widget.raceId);
-      setState(() {
-        _leaderboard = data;
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _leaderboard = data;
+          _lastUpdated = DateTime.now();
+          _isLoading = false;
+          _error = null;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _isLoading = false;
+        });
+      }
     }
   }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   Color _rankColor(int index) {
     if (index == 0) return const Color(0xFFFFD700);
@@ -61,11 +90,46 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
     return '$m:$s';
   }
 
-  void _showRunnerDetail(BuildContext context, int index, Map<String, dynamic> entry) {
+  String _formatTime(DateTime? dt) {
+    if (dt == null) return '--:--:--';
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+
+  String _formatTimestamp(dynamic ts) {
+    try {
+      if (ts is int) {
+        final dt =
+            DateTime.fromMillisecondsSinceEpoch(ts).toLocal();
+        return _formatTime(dt);
+      }
+      return '--';
+    } catch (_) {
+      return '--';
+    }
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(' ');
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.isNotEmpty ? name[0].toUpperCase() : '?';
+  }
+
+  // ── Runner detail sheet ───────────────────────────────────────────────────
+
+  void _showRunnerDetail(
+      BuildContext context, int index, Map<String, dynamic> entry) {
     final rankColor = _rankColor(index);
     final runnerId = entry['runner_id']?.toString() ?? '?';
-    final name = entry['name']?.toString() ?? 'Runner #$runnerId';
+    final name =
+        entry['name']?.toString() ?? 'Runner #$runnerId';
     final initials = _initials(name);
+    final distKm = (entry['distance_km'] as num?)?.toDouble();
+    final checkpointsHit = entry['checkpoints_hit'] as int?;
 
     showModalBottomSheet(
       context: context,
@@ -81,20 +145,19 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // Handle bar
+            // Handle
             Center(
               child: Container(
                 width: 36,
                 height: 3,
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+                    color: Colors.white.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(2)),
               ),
             ),
             const SizedBox(height: 20),
 
-            // Avatar + name
+            // Runner header
             Row(
               children: [
                 Container(
@@ -103,17 +166,15 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: rankColor.withOpacity(0.15),
-                    border: Border.all(color: rankColor.withOpacity(0.4), width: 2),
+                    border: Border.all(
+                        color: rankColor.withOpacity(0.4), width: 2),
                   ),
                   child: Center(
-                    child: Text(
-                      initials,
-                      style: TextStyle(
-                        color: rankColor,
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
+                    child: Text(initials,
+                        style: TextStyle(
+                            color: rankColor,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -121,34 +182,27 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      Text(name,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 17,
+                              fontWeight: FontWeight.bold)),
                       const SizedBox(height: 3),
                       Row(
                         children: [
                           Text(
                             index < 3
-                                ? ['🥇 1st Place', '🥈 2nd Place', '🥉 3rd Place'][index]
+                                ? ['🥇 1st', '🥈 2nd', '🥉 3rd'][index]
                                 : 'Rank #${index + 1}',
                             style: TextStyle(
-                              color: rankColor,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
+                                color: rankColor,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600),
                           ),
-                          Text(
-                            '  ·  ID: $runnerId',
-                            style: const TextStyle(
-                              color: Color(0xFF444460),
-                              fontSize: 12,
-                            ),
-                          ),
+                          Text('  ·  ID: $runnerId',
+                              style: const TextStyle(
+                                  color: Color(0xFF444460),
+                                  fontSize: 12)),
                         ],
                       ),
                     ],
@@ -161,36 +215,64 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
             const Divider(color: Color(0xFF1E1E2E), height: 1),
             const SizedBox(height: 16),
 
-            // Stats grid
+            // Stats row
             Row(
               children: [
                 _DetailStat(
-                  label: 'Speed',
-                  value: '${_speedDisplay(entry['speed'])} km/h',
-                  color: index < 3 ? rankColor : const Color(0xFF00FF9C),
-                ),
+                    label: 'Speed',
+                    value: '${_speedDisplay(entry['speed'])} km/h',
+                    color: index < 3
+                        ? rankColor
+                        : const Color(0xFF00FF9C)),
                 _DetailStatDivider(),
                 _DetailStat(
-                  label: 'Pace',
-                  value: '${_paceDisplay(entry['speed'])} /km',
-                  color: Colors.white,
-                ),
+                    label: 'Pace',
+                    value: '${_paceDisplay(entry['speed'])} /km',
+                    color: Colors.white),
                 _DetailStatDivider(),
                 _DetailStat(
-                  label: 'Last update',
-                  value: entry['timestamp'] != null
-                      ? _formatTimestamp(entry['timestamp'])
-                      : '--',
-                  color: Colors.white,
-                ),
+                    label: 'Last seen',
+                    value: entry['timestamp'] != null
+                        ? _formatTimestamp(entry['timestamp'])
+                        : '--',
+                    color: Colors.white),
               ],
             ),
 
+            // Distance + checkpoints (if API returns them)
+            if (distKm != null || checkpointsHit != null) ...[
+              const SizedBox(height: 12),
+              const Divider(color: Color(0xFF1E1E2E), height: 1),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (distKm != null)
+                    Expanded(
+                      child: _DetailStat(
+                          label: 'Distance',
+                          value: '${distKm.toStringAsFixed(2)} km',
+                          color: const Color(0xFF00B4FF)),
+                    ),
+                  if (distKm != null && checkpointsHit != null)
+                    _DetailStatDivider(),
+                  if (checkpointsHit != null)
+                    Expanded(
+                      child: _DetailStat(
+                          label: 'Checkpoints',
+                          value: '$checkpointsHit',
+                          color: const Color(0xFFFFB800)),
+                    ),
+                ],
+              ),
+            ],
+
+            // GPS coords pill (if available)
             if (entry['lat'] != null && entry['lng'] != null) ...[
               const SizedBox(height: 16),
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
                 decoration: BoxDecoration(
                   color: const Color(0xFF0A0A0F),
                   borderRadius: BorderRadius.circular(10),
@@ -199,46 +281,28 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                 child: Row(
                   children: [
                     const Icon(Icons.location_on_outlined,
-                        color: Color(0xFF444460), size: 16),
+                        color: Color(0xFF444460), size: 14),
                     const SizedBox(width: 8),
                     Text(
-                      '${(entry['lat'] as num).toStringAsFixed(5)},  '
+                      '${(entry['lat'] as num).toStringAsFixed(5)}, '
                       '${(entry['lng'] as num).toStringAsFixed(5)}',
                       style: const TextStyle(
-                        color: Color(0xFF444460),
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                      ),
+                          color: Color(0xFF666680),
+                          fontSize: 12,
+                          fontFamily: 'monospace'),
                     ),
                   ],
                 ),
               ),
             ],
+            const SizedBox(height: 8),
           ],
         ),
       ),
     );
   }
 
-  String _initials(String name) {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
-  }
-
-  String _formatTimestamp(dynamic ts) {
-    try {
-      final dt = DateTime.parse(ts.toString()).toLocal();
-      final h = dt.hour.toString().padLeft(2, '0');
-      final m = dt.minute.toString().padLeft(2, '0');
-      final s = dt.second.toString().padLeft(2, '0');
-      return '$h:$m:$s';
-    } catch (_) {
-      return ts.toString();
-    }
-  }
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -248,85 +312,123 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
         backgroundColor: const Color(0xFF0A0A0F),
         foregroundColor: Colors.white,
         elevation: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        systemOverlayStyle:
+            const SystemUiOverlayStyle(statusBarBrightness: Brightness.dark),
+        title: Row(
           children: [
-            const Text(
-              'Leaderboard',
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            Text(
-              'Race ${widget.raceId} · Live rankings',
-              style: TextStyle(
-                  color: Colors.white.withOpacity(0.4), fontSize: 11),
-            ),
+            const Text('Leaderboard',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(width: 10),
+            _LiveDot(),
           ],
         ),
-        systemOverlayStyle: const SystemUiOverlayStyle(
-          statusBarBrightness: Brightness.dark,
-        ),
         actions: [
+          // Last updated
+          if (_lastUpdated != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  _formatTime(_lastUpdated),
+                  style: const TextStyle(
+                      color: Color(0xFF444460), fontSize: 11),
+                ),
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             color: const Color(0xFF00FF9C),
-            onPressed: _load,
+            onPressed: () => _load(),
           ),
         ],
       ),
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(
-                  color: Color(0xFF00FF9C), strokeWidth: 2),
-            )
+                  color: Color(0xFF00FF9C), strokeWidth: 2))
           : _error != null
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.error_outline_rounded,
-                          color: Color(0xFFFF4D4D), size: 48),
+                      const Icon(Icons.wifi_off,
+                          color: Color(0xFF444460), size: 48),
                       const SizedBox(height: 12),
                       Text(_error!,
-                          style: const TextStyle(color: Colors.white38),
+                          style: const TextStyle(
+                              color: Color(0xFF666680), fontSize: 13),
                           textAlign: TextAlign.center),
                       const SizedBox(height: 16),
                       TextButton(
-                        onPressed: _load,
-                        child: const Text('Try again',
+                        onPressed: () => _load(),
+                        child: const Text('Retry',
                             style: TextStyle(color: Color(0xFF00FF9C))),
                       ),
                     ],
                   ),
                 )
-              : _leaderboard.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+          : _leaderboard.isEmpty
+              ? const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.hourglass_empty,
+                          color: Color(0xFF444460), size: 48),
+                      SizedBox(height: 12),
+                      Text(
+                        'Waiting for runners...',
+                        style: TextStyle(
+                            color: Color(0xFF666680), fontSize: 14),
+                      ),
+                    ],
+                  ),
+                )
+              : Column(
+                  children: [
+                    // Column headers
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                      child: Row(
                         children: [
-                          Icon(Icons.leaderboard_rounded,
-                              size: 64,
-                              color: Colors.white.withOpacity(0.08)),
-                          const SizedBox(height: 16),
-                          Text('No runners yet',
-                              style: TextStyle(
-                                  color: Colors.white.withOpacity(0.3),
-                                  fontSize: 16)),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Rankings appear once runners are active',
-                            style: TextStyle(
-                                color: Colors.white.withOpacity(0.2),
-                                fontSize: 12),
+                          const SizedBox(width: 48),
+                          const Expanded(
+                            flex: 3,
+                            child: Text('RUNNER',
+                                style: TextStyle(
+                                    color: Color(0xFF444460),
+                                    fontSize: 10,
+                                    letterSpacing: 1.5,
+                                    fontWeight: FontWeight.w700)),
                           ),
+                          const Expanded(
+                            flex: 2,
+                            child: Text('SPEED',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: Color(0xFF444460),
+                                    fontSize: 10,
+                                    letterSpacing: 1.5,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          const Expanded(
+                            flex: 2,
+                            child: Text('PACE',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                    color: Color(0xFF444460),
+                                    fontSize: 10,
+                                    letterSpacing: 1.5,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          const SizedBox(width: 24),
                         ],
                       ),
-                    )
-                  : RefreshIndicator(
-                      color: const Color(0xFF00FF9C),
-                      backgroundColor: const Color(0xFF0D0D14),
-                      onRefresh: _load,
+                    ),
+
+                    // Runner rows
+                    Expanded(
                       child: ListView.builder(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                         itemCount: _leaderboard.length,
                         itemBuilder: (context, index) {
                           final entry = _leaderboard[index];
@@ -338,165 +440,251 @@ class _LeaderboardScreenState extends State<LeaderboardScreen> {
                               'Runner #$runnerId';
 
                           return GestureDetector(
-                            onTap: () =>
-                                _showRunnerDetail(context, index, entry),
+                            onTap: () => _showRunnerDetail(
+                                context, index, entry),
                             child: Container(
-                              margin: const EdgeInsets.only(bottom: 10),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 14),
+                              margin: const EdgeInsets.only(bottom: 8),
                               decoration: BoxDecoration(
                                 color: isTop3
-                                    ? rankColor.withOpacity(0.05)
-                                    : Colors.white.withOpacity(0.03),
-                                borderRadius: BorderRadius.circular(14),
+                                    ? rankColor.withOpacity(0.06)
+                                    : const Color(0xFF0D0D14),
+                                borderRadius: BorderRadius.circular(12),
                                 border: Border.all(
                                   color: isTop3
                                       ? rankColor.withOpacity(0.25)
-                                      : Colors.white.withOpacity(0.07),
+                                      : const Color(0xFF1E1E2E),
+                                  width: 1,
                                 ),
                               ),
-                              child: Row(
-                                children: [
-                                  // Rank badge
-                                  Container(
-                                    width: 36,
-                                    height: 36,
-                                    decoration: BoxDecoration(
-                                      color: rankColor.withOpacity(
-                                          isTop3 ? 0.15 : 0.08),
-                                      shape: BoxShape.circle,
-                                      border: Border.all(
-                                        color: rankColor.withOpacity(
-                                            isTop3 ? 0.5 : 0.2),
-                                      ),
-                                    ),
-                                    child: Center(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 12),
+                                child: Row(
+                                  children: [
+                                    // Rank
+                                    SizedBox(
+                                      width: 32,
                                       child: Text(
-                                        '${index + 1}',
+                                        isTop3
+                                            ? ['🥇', '🥈', '🥉'][index]
+                                            : '#${index + 1}',
                                         style: TextStyle(
                                           color: rankColor,
+                                          fontSize: isTop3 ? 20 : 13,
                                           fontWeight: FontWeight.bold,
-                                          fontSize: 14,
+                                        ),
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+
+                                    // Avatar
+                                    Container(
+                                      width: 30,
+                                      height: 30,
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color:
+                                            rankColor.withOpacity(0.1),
+                                        border: Border.all(
+                                            color: rankColor
+                                                .withOpacity(0.3)),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          _initials(name),
+                                          style: TextStyle(
+                                              color: rankColor,
+                                              fontSize: 10,
+                                              fontWeight:
+                                                  FontWeight.bold),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 12),
+                                    const SizedBox(width: 10),
 
-                                  // Avatar initials circle
-                                  Container(
-                                    width: 30,
-                                    height: 30,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: rankColor.withOpacity(0.1),
-                                      border: Border.all(
-                                          color: rankColor.withOpacity(0.3)),
-                                    ),
-                                    child: Center(
-                                      child: Text(
-                                        _initials(name),
-                                        style: TextStyle(
-                                          color: rankColor,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-
-                                  // Runner name + ID subtext
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          name,
-                                          style: TextStyle(
-                                            color: Colors.white
-                                                .withOpacity(0.85),
-                                            fontWeight: FontWeight.w600,
-                                            fontSize: 14,
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        Text(
-                                          'ID: $runnerId',
-                                          style: TextStyle(
-                                            color: Colors.white
-                                                .withOpacity(0.22),
-                                            fontSize: 10,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-
-                                  // Speed
-                                  Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.end,
-                                    children: [
-                                      Row(
-                                        mainAxisSize: MainAxisSize.min,
+                                    // Name + sub-label
+                                    Expanded(
+                                      flex: 3,
+                                      child: Column(
                                         crossAxisAlignment:
-                                            CrossAxisAlignment.end,
+                                            CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            _speedDisplay(entry['speed']),
+                                            name,
                                             style: TextStyle(
-                                              color: isTop3
-                                                  ? rankColor
-                                                  : const Color(0xFF00FF9C),
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.bold,
+                                              color: Colors.white
+                                                  .withOpacity(0.85),
+                                              fontWeight:
+                                                  FontWeight.w600,
+                                              fontSize: 13,
                                             ),
+                                            overflow:
+                                                TextOverflow.ellipsis,
                                           ),
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                                bottom: 2, left: 3),
-                                            child: Text(
-                                              'km/h',
+                                          // Show distance if API provides it
+                                          if (entry['distance_km'] !=
+                                              null)
+                                            Text(
+                                              '${(entry['distance_km'] as num).toStringAsFixed(2)} km',
                                               style: TextStyle(
-                                                color: Colors.white
-                                                    .withOpacity(0.3),
-                                                fontSize: 10,
-                                              ),
+                                                  color: Colors.white
+                                                      .withOpacity(
+                                                          0.25),
+                                                  fontSize: 10),
                                             ),
+                                        ],
+                                      ),
+                                    ),
+
+                                    // Speed
+                                    Expanded(
+                                      flex: 2,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            children: [
+                                              Text(
+                                                _speedDisplay(
+                                                    entry['speed']),
+                                                style: TextStyle(
+                                                  color: isTop3
+                                                      ? rankColor
+                                                      : const Color(
+                                                          0xFF00FF9C),
+                                                  fontSize: 16,
+                                                  fontWeight:
+                                                      FontWeight.bold,
+                                                ),
+                                              ),
+                                              Padding(
+                                                padding: const EdgeInsets
+                                                    .only(
+                                                    bottom: 2, left: 2),
+                                                child: Text('km/h',
+                                                    style: TextStyle(
+                                                        color: Colors
+                                                            .white
+                                                            .withOpacity(
+                                                                0.3),
+                                                        fontSize: 9)),
+                                              ),
+                                            ],
                                           ),
                                         ],
                                       ),
-                                      Text(
-                                        '${_paceDisplay(entry['speed'])} /km',
-                                        style: TextStyle(
-                                          color: Colors.white.withOpacity(0.22),
-                                          fontSize: 10,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+                                    ),
 
-                                  // Chevron hint
-                                  const SizedBox(width: 8),
-                                  Icon(
-                                    Icons.chevron_right,
-                                    color: Colors.white.withOpacity(0.12),
-                                    size: 18,
-                                  ),
-                                ],
+                                    // Pace
+                                    Expanded(
+                                      flex: 2,
+                                      child: Text(
+                                        '${_paceDisplay(entry['speed'])} /km',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            color: Colors.white
+                                                .withOpacity(0.25),
+                                            fontSize: 11),
+                                      ),
+                                    ),
+
+                                    // Chevron
+                                    Icon(Icons.chevron_right,
+                                        color: Colors.white
+                                            .withOpacity(0.12),
+                                        size: 18),
+                                  ],
+                                ),
                               ),
                             ),
                           );
                         },
                       ),
                     ),
+
+                    // Footer
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 8),
+                      color: const Color(0xFF0D0D14),
+                      child: Row(
+                        mainAxisAlignment:
+                            MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            '${_leaderboard.length} runner${_leaderboard.length == 1 ? '' : 's'} active',
+                            style: const TextStyle(
+                                color: Color(0xFF444460), fontSize: 11),
+                          ),
+                          Text(
+                            'Updates every 5s',
+                            style: const TextStyle(
+                                color: Color(0xFF444460), fontSize: 11),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
     );
   }
 }
 
-// ─── DETAIL STAT ─────────────────────────────────────────────────────────────
+// ── Live dot ──────────────────────────────────────────────────────────────────
+class _LiveDot extends StatefulWidget {
+  @override
+  State<_LiveDot> createState() => _LiveDotState();
+}
+
+class _LiveDotState extends State<_LiveDot>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1000))
+      ..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Color.lerp(const Color(0xFF00FF9C),
+              const Color(0xFF00FF9C).withOpacity(0.3), _ctrl.value),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF00FF9C)
+                  .withOpacity(0.5 * (1 - _ctrl.value)),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Detail stat ───────────────────────────────────────────────────────────────
 class _DetailStat extends StatelessWidget {
   final String label;
   final String value;
@@ -509,18 +697,17 @@ class _DetailStat extends StatelessWidget {
     return Expanded(
       child: Column(
         children: [
-          Text(
-            value,
-            style: TextStyle(
-                color: color, fontSize: 16, fontWeight: FontWeight.bold),
-            textAlign: TextAlign.center,
-          ),
+          Text(value,
+              style: TextStyle(
+                  color: color,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center),
           const SizedBox(height: 3),
-          Text(
-            label,
-            style: const TextStyle(color: Color(0xFF444460), fontSize: 11),
-            textAlign: TextAlign.center,
-          ),
+          Text(label,
+              style: const TextStyle(
+                  color: Color(0xFF444460), fontSize: 11),
+              textAlign: TextAlign.center),
         ],
       ),
     );
