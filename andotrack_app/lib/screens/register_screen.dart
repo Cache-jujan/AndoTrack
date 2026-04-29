@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'login_screen.dart';
 import 'organizer_dashboard.dart';
-import 'runner_map_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'race_list_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -39,7 +40,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     if (password.length < 6) {
-      setState(() => _errorMessage = 'Password must be at least 6 characters.');
+      setState(
+          () => _errorMessage = 'Password must be at least 6 characters.');
       return;
     }
 
@@ -49,14 +51,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
     });
 
     try {
-      final result = await ApiService.register(name, email, password, _selectedRole);
+      final result =
+          await ApiService.register(name, email, password, _selectedRole);
 
       if (result['success'] == true) {
         final token = result['token'] as String;
         final role = result['role'] as String;
-
-        await ApiService.saveToken(token);
-        await ApiService.saveRole(role);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('jwt_token', token);
+        await prefs.setString('user_role', role);
+        await prefs.setInt('user_id', result['user_id']);
+        await prefs.setString('user_name', result['name']);
+        
 
         if (!mounted) return;
 
@@ -64,20 +70,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Navigator.pushReplacement(
             context,
             MaterialPageRoute(
-              builder: (_) => const OrganizerDashboard(raceId: 'race1'),
+              builder: (_) => const OrganizerDashboard(),
             ),
           );
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+            MaterialPageRoute(builder: (_) => const RaceListScreen()),
           );
         }
       } else {
-        setState(() => _errorMessage = result['message'] ?? 'Registration failed.');
+        setState(
+            () => _errorMessage = result['message'] ?? 'Registration failed.');
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Connection error. Is the server running?');
+      setState(
+          () => _errorMessage = 'Connection error. Is the server running?');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -101,7 +109,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
               Center(
                 child: Column(
                   children: [
@@ -137,22 +144,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               const SizedBox(height: 36),
 
-              // Name
-              const Text('Full Name', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Full Name',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _nameController,
                 decoration: InputDecoration(
                   hintText: 'Enter your name',
                   prefixIcon: const Icon(Icons.person_outline),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
 
               const SizedBox(height: 20),
 
-              // Email
-              const Text('Email', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Email',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _emailController,
@@ -160,14 +168,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 decoration: InputDecoration(
                   hintText: 'Enter your email',
                   prefixIcon: const Icon(Icons.email_outlined),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
 
               const SizedBox(height: 20),
 
-              // Password
-              const Text('Password', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Password',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _passwordController,
@@ -177,19 +186,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
                     icon: Icon(
-                      _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                      _obscurePassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
                     ),
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                   ),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
 
               const SizedBox(height: 20),
 
-              // Role selector
-              const Text('I am a...', style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('I am a...',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -207,7 +219,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       label: 'Organizer',
                       icon: Icons.map,
                       selected: _selectedRole == 'organizer',
-                      onTap: () => setState(() => _selectedRole = 'organizer'),
+                      onTap: () =>
+                          setState(() => _selectedRole = 'organizer'),
                     ),
                   ),
                 ],
@@ -215,7 +228,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               const SizedBox(height: 16),
 
-              // Error
               if (_errorMessage != null)
                 Container(
                   width: double.infinity,
@@ -233,7 +245,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               const SizedBox(height: 24),
 
-              // Register button
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -267,7 +278,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               const SizedBox(height: 20),
 
-              // Back to login
               Center(
                 child: TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -326,7 +336,8 @@ class _RoleCard extends StatelessWidget {
         ),
         child: Column(
           children: [
-            Icon(icon, color: selected ? Colors.white : Colors.grey, size: 28),
+            Icon(icon,
+                color: selected ? Colors.white : Colors.grey, size: 28),
             const SizedBox(height: 6),
             Text(
               label,

@@ -7,12 +7,15 @@ import 'screens/organizer_dashboard.dart';
 import 'screens/runner_map_screen.dart';
 import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'services/notification_service.dart';
+import 'screens/race_list_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await NotificationService.init();
   runApp(const ProviderScope(child: MyApp()));
 }
 
@@ -39,7 +42,6 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
-
   @override
   void initState() {
     super.initState();
@@ -63,7 +65,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
-  // If a valid JWT is stored, skip login and go straight to the right screen
   Future<void> _checkExistingSession() async {
     final token = await ApiService.getToken();
     final role = await ApiService.getRole();
@@ -75,13 +76,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => const OrganizerDashboard(raceId: 'race1'),
+          builder: (_) => const OrganizerDashboard(),
         ),
       );
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+        MaterialPageRoute(builder: (_) => const RaceListScreen()),
       );
     }
   }
@@ -102,8 +103,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       await _showPermissionDeniedDialog();
       return;
     }
-
-    print('Location permission granted.');
   }
 
   Future<void> _showLocationServiceDialog() async {

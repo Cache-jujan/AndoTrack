@@ -3,8 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import 'organizer_dashboard.dart';
-import 'runner_map_screen.dart';
-import 'register_screen.dart'; // ← added
+import 'runner_dashboard_screen.dart';
+import 'register_screen.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
@@ -48,34 +48,30 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         final token = result['token'] as String;
         final role = result['role'] as String;
 
-        // Store JWT in shared_preferences
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('jwt_token', token);
         await prefs.setString('user_role', role);
-
+        await prefs.setInt('user_id', result['user_id']);
+        await prefs.setString('user_name', result['name']);
         if (!mounted) return;
 
-        // Role-based navigation
         if (role == 'organizer') {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const OrganizerDashboard(raceId: 'race1'),
-            ),
+            MaterialPageRoute(builder: (_) => const OrganizerDashboard()),
           );
         } else {
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(
-              builder: (_) => const RunnerMapScreen(),
-            ),
+            MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
           );
         }
       } else {
         setState(() => _errorMessage = result['message'] ?? 'Login failed.');
       }
     } catch (e) {
-      setState(() => _errorMessage = 'Connection error. Is the server running?');
+      setState(
+          () => _errorMessage = 'Connection error. Is the server running?');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -91,7 +87,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo / Title
               const SizedBox(height: 32),
               Center(
                 child: Column(
@@ -128,11 +123,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 48),
 
-              // Email field
-              const Text(
-                'Email',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+              const Text('Email',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _emailController,
@@ -148,11 +140,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 20),
 
-              // Password field
-              const Text(
-                'Password',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
+              const Text('Password',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               TextField(
                 controller: _passwordController,
@@ -166,9 +155,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ? Icons.visibility_off
                           : Icons.visibility,
                     ),
-                    onPressed: () {
-                      setState(() => _obscurePassword = !_obscurePassword);
-                    },
+                    onPressed: () =>
+                        setState(() => _obscurePassword = !_obscurePassword),
                   ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -179,7 +167,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 12),
 
-              // Error message
               if (_errorMessage != null)
                 Container(
                   width: double.infinity,
@@ -197,7 +184,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 24),
 
-              // Login button
               SizedBox(
                 width: double.infinity,
                 height: 52,
@@ -207,40 +193,29 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+                        borderRadius: BorderRadius.circular(12)),
                   ),
                   child: _isLoading
                       ? const SizedBox(
                           width: 24,
                           height: 24,
                           child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
+                              color: Colors.white, strokeWidth: 2),
                         )
-                      : const Text(
-                          'Login',
+                      : const Text('Login',
                           style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                              fontSize: 16, fontWeight: FontWeight.bold)),
                 ),
               ),
 
-              // ── Register link ────────────────────────────────
               const SizedBox(height: 16),
               Center(
                 child: TextButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const RegisterScreen(),
-                      ),
-                    );
-                  },
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const RegisterScreen()),
+                  ),
                   child: const Text.rich(
                     TextSpan(
                       text: "Don't have an account? ",
@@ -249,18 +224,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         TextSpan(
                           text: 'Register',
                           style: TextStyle(
-                            color: Colors.blue,
-                            fontWeight: FontWeight.bold,
-                          ),
+                              color: Colors.blue,
+                              fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
                   ),
                 ),
               ),
-              // ────────────────────────────────────────────────
 
-              // Temporary bypass buttons for testing
+              // Quick test bypass
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
@@ -275,15 +248,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 children: [
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                const OrganizerDashboard(raceId: 'race1'),
-                          ),
-                        );
-                      },
+                      onPressed: () => Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const OrganizerDashboard()),
+                      ),
                       icon: const Icon(Icons.map, size: 16),
                       label: const Text('Organizer'),
                     ),
@@ -291,14 +260,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pushReplacement(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const RunnerMapScreen(),
-                          ),
-                        );
-                      },
+                      onPressed: () => Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const RunnerDashboardScreen()),
+                      ),
                       icon: const Icon(Icons.directions_run, size: 16),
                       label: const Text('Runner'),
                     ),
