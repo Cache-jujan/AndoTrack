@@ -74,6 +74,34 @@ class ApiService {
     }
   }
 
+static Future<Map<String, dynamic>> registerForRace({
+  required int raceId,
+  required String city,
+  required String contactNumber,
+  required String emergencyContact,
+  required String email, 
+  required bool isFirstMarathon,
+  required String sex,
+}) async {
+  final headers = await _authHeaders();
+  final res = await http.post(
+    Uri.parse('$_base/races/$raceId/register'),
+    headers: headers,
+    body: jsonEncode({
+      'city': city,
+      'contact_number': contactNumber,
+      'emergency_contact': emergencyContact,
+      'is_first_marathon': isFirstMarathon,
+      'sex': sex,
+      'email': email
+    }),
+  );
+  if (res.statusCode == 200) {
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+  final body = jsonDecode(res.body) as Map<String, dynamic>;
+  throw Exception(body['detail'] ?? 'Registration failed');
+}
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('jwt_token');

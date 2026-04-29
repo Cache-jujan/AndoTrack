@@ -1,5 +1,4 @@
 // ============================================================
-// FINAL RESULTS SCREEN — Day 28
 // Shown after race ends on runner app, organizer dashboard,
 // and public leaderboard. Fetches final leaderboard data.
 // ============================================================
@@ -42,9 +41,9 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
 
   Future<void> _load() async {
     try {
-      final data = await ApiService.getLeaderboard(widget.raceId);
-      final leaderboard =
-          List<Map<String, dynamic>>.from(data['leaderboard'] ?? []);
+      // FIX 2: getLeaderboard returns List<Map<String,dynamic>> directly,
+      // not a Map with a 'leaderboard' key — use it directly.
+      final leaderboard = await ApiService.getLeaderboard(widget.raceId);
       if (mounted) {
         setState(() {
           _results = leaderboard;
