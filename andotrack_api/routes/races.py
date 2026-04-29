@@ -1,3 +1,6 @@
+from models.result import RaceResult
+from utils.pace import get_runner_pace_summary
+from utils.distance_tracker import get_all_runners_distance
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -355,3 +358,140 @@ def get_anomalies(
     if resolved is not None:
         query = query.filter(Anomaly.resolved == resolved)
     return query.all()
+
+
+# ── Results-Finished Endpoints ─────────────────────────────────────────────────────────────────
+# Endpoint for saving finished race in database
+
+@router.post("/{race_id}/finish")
+def finish_race(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Organizer finishes the race.
+    - Sets race status to 'finished'
+    - Snapshots the current leaderboard (from in-memory distance tracker)
+      into the race_results table so rankings survive a server restart.
+    - Returns the final saved standings.
+    """
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can finish a race.")
+    
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race is not found!")
+    if race.status == "finished":
+        raise HTTPException(status_code=400, detail="Race is already finished.")
+    if race.status != "active":
+        raise HTTPException(status_code=400, detail="Race must be active before it can be finished.")
+    
+    # Prevents duplicate when called multiple twice
+    existing = db.query(RaceResult).filter(RaceResult.race_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Results are already saved for this race")
+    
+
+    standings = get_all_runners_distance(race_id)
+
+    now = datetime.datetime.utcnow()
+    saved = []
+
+    for rank, entry in enumerate(standings, start=1):
+        runner_id = int(entry["runner_id"])
+        pace_data = get_runner_pace_summary(str(runner_id))
+        
+        result = RaceResult(
+            race_id = race_id,
+            runner_id = runner_id,
+            rank = rank,
+            distance_metres = entry["distance_metres"],
+            distance_km = entry["distance_km"],
+            pace_min_per_km = pace_data.get("pace_min_per_km"),
+            pace_formatted = pace_data.get("pace_formatted"),
+            finished_at = now,
+        )
+        db.add(result)
+
+        #Look up runner name for the response
+        runner = db.query(User).filter(User.id == runner_id).first()
+        saved.append({
+            "rank": rank,
+            "runner_id": runner_id,
+            "name": runner.name if runner else f"Runner #{runner_id}",
+            "distance_metres": entry["distance_metres"],
+            "distance_km": entry["distance_km"],
+            "distance_formatted": entry["distance_formatted"],
+            "pace_min_per_km": pace_data.get("pace_min_per_km"),
+            "pace_formatted": pace_data.get("pace_formatted"),
+            "finished_at": now.isoformat(),
+        })
+    race.status = "finished"
+    db.commit()
+
+    return{
+        "message": f"Race '{race.name}' finished!. Results saved.",
+        "race_id": race_id,
+        "race_name": race.name,
+        "total": len(saved),
+        "results": saved,
+    }
+
+
+#Endpoint for fetching saved results of race
+
+@router.get("/{race_id}/results")
+def get_race_results(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Returns the persisted final results for a finished race.
+    Used by final_results_screen.dart after race ends.
+    Falls back to the live leaderboard if the race is still active.
+    """
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+    
+    rows = (
+        db.query(RaceResult)
+        .filter(RaceResult.race_id == race_id)
+        .order_by(RaceResult.rank)
+        .all()
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No results saved yet. Call Post /races/{race_id}/finish first."
+        )
+    
+    results = []
+    for row in rows:
+        runner = db.query(User).filter(User.id == row.runner_id).first()
+        result.append({
+            "rank": row.rank,
+            "runner_id": row.runner_id,
+            "name": runner.name if runner else f"Runner #{row.runner_id}",
+            "distance_metres": row.distance_metres,
+            "distance_km": row.distance_km,
+            "distance_formatted": (
+                f"{row.distance_meteres:.0f} m"
+                if row.distance_metres < 1000
+                else f"{row.distance_km:.2f} km"
+            ),
+            "pace_min_per_km": row.pace_min_per_km,
+            "pace_formatted": row.pace_formatted or "-",
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+        })
+
+    return {
+        "race_id": race_id,
+        "race_name": race.name,
+        "status": race.status,
+        "total": len(results),
+        "results": results,
+    }

@@ -7,7 +7,9 @@ import 'package:geolocator/geolocator.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+
 import '../services/api_service.dart';
+import '../services/routing_service.dart';
 import 'runner_dashboard_screen.dart';
 import 'settings_screen.dart';
 import '../services/notification_service.dart';
@@ -20,37 +22,45 @@ class RunnerMapScreen extends StatefulWidget {
 }
 
 class _RunnerMapScreenState extends State<RunnerMapScreen> {
+  // ── Controllers ───────────────────────────────────────────
   final MapController _mapController = MapController();
   StreamSubscription<Position>? _positionSub;
-  // FIX 1: Changed from StreamSubscription<ConnectivityResult>? to List<ConnectivityResult>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
 
-  LatLng? _myPosition;
+  // ── Runner identity ───────────────────────────────────────
   int? _runnerId;
   int? _raceId;
 
+  // ── Map state ─────────────────────────────────────────────
+  LatLng? _myPosition;
   List<_CheckpointData> _checkpoints = [];
   Set<int> _passedCheckpointIds = {};
+  List<LatLng> _routePolyline = [];       // road-based full route
+  List<LatLng> _remainingPolyline = [];   // road-based remaining route
 
   Position? _lastPosition;
   bool _gpsReady = false;
   bool _mapMoved = false;
 
-  // ─── HUD tracking state ─────────────────────────────────
+  // ── HUD ───────────────────────────────────────────────────
   final Stopwatch _stopwatch = Stopwatch();
   Timer? _hudTimer;
   double _totalDistanceMeters = 0.0;
   Position? _prevPosition;
 
-  // ─── Race status ─────────────────────────────────────────
+  // ── Race ─────────────────────────────────────────────────
   String _raceStatus = 'upcoming';
   String _raceName = '';
 
-  // ─── Connectivity ─────────────────────────────────────────
+  // ── Connectivity + offline queue ──────────────────────────
   bool _isOnline = true;
   final List<Map<String, dynamic>> _offlineQueue = [];
 
-  // ─── INIT ─────────────────────────────────────────────────
+  // ── Route building lock ───────────────────────────────────
+  bool _buildingRoute = false;
+
+  // ── INIT ──────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
@@ -68,13 +78,13 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     _listenToPassedCheckpoints();
     _listenToConnectivity();
 
-    // HUD timer: update elapsed display every second
     _hudTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
   }
 
-  // ─── RACE STATUS ──────────────────────────────────────────
+  // ── Race status ───────────────────────────────────────────
+
   Future<void> _loadRaceStatus() async {
     try {
       final races = await ApiService.getRaces();
@@ -92,11 +102,12 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     } catch (_) {}
   }
 
-  // ─── CONNECTIVITY ─────────────────────────────────────────
+  // ── Connectivity ──────────────────────────────────────────
+
   void _listenToConnectivity() {
-    // FIX 1: Parameter is now List<ConnectivityResult>, check with .contains()
     _connectivitySub = Connectivity().onConnectivityChanged.listen((results) {
-      final online = results.isNotEmpty && !results.contains(ConnectivityResult.none);
+      final online = results.isNotEmpty &&
+          !results.contains(ConnectivityResult.none);
       if (mounted) setState(() => _isOnline = online);
       if (online && _offlineQueue.isNotEmpty) _syncOfflineQueue();
     });
@@ -117,13 +128,20 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     }
   }
 
-  // ─── GPS ──────────────────────────────────────────────────
+  // ── GPS ───────────────────────────────────────────────────
+
   Future<void> _startGPS() async {
     LocationPermission perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
     }
-    if (perm == LocationPermission.deniedForever) return;
+    if (perm == LocationPermission.deniedForever) {
+      if (mounted) {
+        _showPermissionDeniedBanner();
+      }
+      return;
+    }
+    if (perm == LocationPermission.denied) return;
 
     try {
       final last = await Geolocator.getLastKnownPosition();
@@ -145,13 +163,18 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
       ),
     ).listen((pos) {
       if (!mounted) return;
+      // Filter out wildly inaccurate readings
       if (_gpsReady && pos.accuracy > 100) return;
-      if (!_gpsReady && pos.accuracy <= 80) {
+
+      // FIX 4: Track whether this is the FIRST valid GPS fix.
+      // _buildRemainingRoutePolyline() was called during init but returned
+      // early because _myPosition was null. Trigger it again now.
+      final bool wasFirstFix = !_gpsReady && pos.accuracy <= 80;
+      if (wasFirstFix) {
         setState(() => _gpsReady = true);
         if (_raceStatus == 'active') _stopwatch.start();
       }
 
-      // Accumulate distance
       if (_prevPosition != null) {
         _totalDistanceMeters += Geolocator.distanceBetween(
           _prevPosition!.latitude,
@@ -162,19 +185,63 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
       }
       _prevPosition = pos;
 
+      final bool hadNoPosition = _myPosition == null;
       final newPos = LatLng(pos.latitude, pos.longitude);
       setState(() {
         _myPosition = newPos;
         _lastPosition = pos;
       });
 
+      // Auto-follow unless user has manually moved map
       if (!_mapMoved) {
         _mapController.move(newPos, _mapController.camera.zoom);
+      }
+
+      // FIX 4: Build remaining-route polyline on the first position fix so
+      // runners see the route from their actual GPS location immediately,
+      // instead of waiting until they physically pass a checkpoint.
+      if (hadNoPosition || wasFirstFix) {
+        _buildRemainingRoutePolyline();
       }
 
       _pushToFirebase(pos);
       _checkCheckpointProximity(pos);
     }, onError: (e) => debugPrint('GPS error: $e'));
+  }
+
+  void _showPermissionDeniedBanner() {
+    ScaffoldMessenger.of(context).showMaterialBanner(
+      MaterialBanner(
+        content: const Text(
+          'Location permission denied. Enable it in Settings to track your run.',
+          style: TextStyle(color: Colors.white),
+        ),
+        backgroundColor: const Color(0xFF0D0D14),
+        actions: [
+          TextButton(
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+              Geolocator.openAppSettings();
+            },
+            child: const Text('Open Settings',
+                style: TextStyle(color: Color(0xFF00FF9C))),
+          ),
+          TextButton(
+            onPressed: () =>
+                ScaffoldMessenger.of(context).hideCurrentMaterialBanner(),
+            child: const Text('Dismiss',
+                style: TextStyle(color: Color(0xFF444460))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _centerOnMe() {
+    if (_myPosition != null) {
+      _mapController.move(_myPosition!, _mapController.camera.zoom);
+      setState(() => _mapMoved = false);
+    }
   }
 
   void _pushToFirebase(Position pos) {
@@ -191,15 +258,12 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
           .ref('races/$_raceId/runners/$_runnerId')
           .update(data);
     } else {
-      _offlineQueue.add({
-        'raceId': _raceId,
-        'runnerId': _runnerId,
-        ...data,
-      });
+      _offlineQueue.add({'raceId': _raceId, 'runnerId': _runnerId, ...data});
     }
   }
 
-  // ─── CHECKPOINTS ──────────────────────────────────────────
+  // ── Checkpoints ───────────────────────────────────────────
+
   Future<void> _loadCheckpoints() async {
     if (_raceId == null) return;
     try {
@@ -219,9 +283,52 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
             ..sort((a, b) => a.orderNumber.compareTo(b.orderNumber));
         });
       }
+      // Build initial road-based polyline
+      await _buildFullRoutePolyline();
     } catch (e) {
       debugPrint('Failed to load checkpoints: $e');
     }
+  }
+
+  /// Builds the road polyline for the full checkpoint sequence.
+  Future<void> _buildFullRoutePolyline() async {
+    if (_checkpoints.length < 2 || _buildingRoute) return;
+    _buildingRoute = true;
+    try {
+      final waypoints =
+          _checkpoints.map((c) => LatLng(c.lat, c.lng)).toList();
+      final pts = await RoutingService.getRoutePolyline(waypoints);
+      if (mounted) setState(() => _routePolyline = pts);
+      await _buildRemainingRoutePolyline();
+    } finally {
+      _buildingRoute = false;
+    }
+  }
+
+  /// Re-routes from current position to next unpassed checkpoint onwards.
+  /// Called whenever a new checkpoint is passed (dynamic re-routing).
+  Future<void> _buildRemainingRoutePolyline() async {
+    final next = _nextCheckpoint;
+    if (next == null) {
+      // All done — clear the remaining line
+      if (mounted) setState(() => _remainingPolyline = []);
+      return;
+    }
+    // FIX 4: Don't wipe existing polyline if GPS has no fix yet —
+    // just skip and wait for the next position update to retry.
+    if (_myPosition == null) return;
+
+    final remaining = _checkpoints
+        .where((c) => !_passedCheckpointIds.contains(c.id))
+        .toList();
+
+    final waypoints = [
+      _myPosition!,
+      ...remaining.map((c) => LatLng(c.lat, c.lng)),
+    ];
+
+    final pts = await RoutingService.getRoutePolyline(waypoints);
+    if (mounted) setState(() => _remainingPolyline = pts);
   }
 
   void _listenToPassedCheckpoints() {
@@ -231,10 +338,17 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
         .onValue
         .listen((event) {
       if (!mounted || event.snapshot.value == null) return;
-      final data = Map<String, dynamic>.from(event.snapshot.value as Map);
-      setState(() {
-        _passedCheckpointIds = data.keys.map(int.parse).toSet();
-      });
+      final data =
+          Map<String, dynamic>.from(event.snapshot.value as Map);
+      final newPassed = data.keys.map(int.parse).toSet();
+
+      final gained = newPassed.difference(_passedCheckpointIds);
+      setState(() => _passedCheckpointIds = newPassed);
+
+      // Dynamic re-route when a new checkpoint is passed
+      if (gained.isNotEmpty) {
+        _buildRemainingRoutePolyline();
+      }
     });
   }
 
@@ -257,22 +371,18 @@ void _checkCheckpointProximity(Position pos) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Row(
-              children: [
-                const Icon(Icons.check_circle, color: Colors.black, size: 18),
-                const SizedBox(width: 8),
-                Text(
-                  '${next.name} reached!',
+            content: Row(children: [
+              const Icon(Icons.check_circle,
+                  color: Colors.black, size: 18),
+              const SizedBox(width: 8),
+              Text('${next.name} reached!',
                   style: const TextStyle(
-                      color: Colors.black, fontWeight: FontWeight.bold),
-                ),
-                if (remaining > 0)
-                  Text(
-                    '  ·  $remaining remaining',
-                    style: const TextStyle(color: Colors.black54, fontSize: 12),
-                  ),
-              ],
-            ),
+                      color: Colors.black, fontWeight: FontWeight.bold)),
+              if (remaining > 0)
+                Text('  ·  $remaining remaining',
+                    style: const TextStyle(
+                        color: Colors.black54, fontSize: 12)),
+            ]),
             backgroundColor: const Color(0xFF00FF9C),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -292,7 +402,8 @@ void _checkCheckpointProximity(Position pos) {
     }
   }
 
-  // ─── HUD HELPERS ──────────────────────────────────────────
+  // ── HUD helpers ───────────────────────────────────────────
+
   double get _speedKmh =>
       ((_lastPosition?.speed ?? 0) * 3.6).clamp(0, 99.9);
 
@@ -307,7 +418,9 @@ void _checkCheckpointProximity(Position pos) {
 
   String get _distanceStr {
     final km = _totalDistanceMeters / 1000;
-    return km >= 1.0 ? '${km.toStringAsFixed(2)} km' : '${_totalDistanceMeters.toStringAsFixed(0)} m';
+    return km >= 1.0
+        ? '${km.toStringAsFixed(2)} km'
+        : '${_totalDistanceMeters.toStringAsFixed(0)} m';
   }
 
   String get _elapsedStr {
@@ -318,7 +431,19 @@ void _checkCheckpointProximity(Position pos) {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
-  // ─── BUILD ────────────────────────────────────────────────
+  // ── Dispose ───────────────────────────────────────────────
+
+  @override
+  void dispose() {
+    _positionSub?.cancel();
+    _connectivitySub?.cancel();
+    _hudTimer?.cancel();
+    _stopwatch.stop();
+    super.dispose();
+  }
+
+  // ── Build ─────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -334,7 +459,7 @@ void _checkCheckpointProximity(Position pos) {
             title: const Text('Leave race tracking?',
                 style: TextStyle(color: Colors.white, fontSize: 16)),
             content: const Text(
-              'Your GPS tracking will stop and your position will no longer update.',
+              'Your GPS tracking will stop.',
               style: TextStyle(color: Color(0xFF888899), fontSize: 13),
             ),
             actions: [
@@ -354,7 +479,8 @@ void _checkCheckpointProximity(Position pos) {
         if (leave == true && context.mounted) {
           Navigator.pushAndRemoveUntil(
             context,
-            MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
+            MaterialPageRoute(
+                builder: (_) => const RunnerDashboardScreen()),
             (_) => false,
           );
         }
@@ -363,303 +489,256 @@ void _checkCheckpointProximity(Position pos) {
         backgroundColor: const Color(0xFF0A0A0F),
         body: Stack(
           children: [
-            // ── MAP ─────────────────────────────────────────
-            FlutterMap(
-              mapController: _mapController,
-              options: MapOptions(
-                initialCenter: _myPosition ?? const LatLng(10.3157, 123.8854),
-                initialZoom: 16,
-                onPositionChanged: (_, hasGesture) {
-                  if (hasGesture && !_mapMoved) {
-                    setState(() => _mapMoved = true);
-                  }
-                },
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                  subdomains: const ['a', 'b', 'c', 'd'],
-                ),
-                // Route polyline
-                if (_checkpoints.length >= 2)
-                  PolylineLayer(
-                    polylines: [
-                      Polyline(
-                        points: _checkpoints
-                            .map((c) => LatLng(c.lat, c.lng))
-                            .toList(),
-                        color: const Color(0xFF00B4FF).withOpacity(0.4),
-                        strokeWidth: 2.5,
-                        isDotted: true,
-                      ),
-                    ],
-                  ),
-                // Checkpoint radius circles
-                CircleLayer(
-                  circles: _checkpoints.map((cp) {
-                    final isPassed = _passedCheckpointIds.contains(cp.id);
-                    final isNext = cp.id == _nextCheckpoint?.id;
-                    return CircleMarker(
-                      point: LatLng(cp.lat, cp.lng),
-                      radius: cp.radiusMeters.toDouble(),
-                      useRadiusInMeter: true,
-                      color: isPassed
-                          ? const Color(0xFF00FF9C).withOpacity(0.12)
-                          : isNext
-                              ? const Color(0xFF00B4FF).withOpacity(0.15)
-                              : Colors.white.withOpacity(0.04),
-                      borderColor: isPassed
-                          ? const Color(0xFF00FF9C)
-                          : isNext
-                              ? const Color(0xFF00B4FF)
-                              : const Color(0xFF333348),
-                      borderStrokeWidth: isNext ? 2.5 : 1.5,
-                    );
-                  }).toList(),
-                ),
-                MarkerLayer(
-                  markers: [
-                    // Checkpoints
-                    ..._checkpoints.asMap().entries.map((entry) {
-                      final i = entry.key;
-                      final cp = entry.value;
-                      final isPassed = _passedCheckpointIds.contains(cp.id);
-                      final isNext = cp.id == _nextCheckpoint?.id;
-                      final isLast = i == _checkpoints.length - 1;
-                      final isFirst = i == 0;
-                      return Marker(
-                        point: LatLng(cp.lat, cp.lng),
-                        width: isNext ? 140 : 110,
-                        height: 52,
-                        child: _CheckpointMarker(
-                          cp: cp,
-                          index: i,
-                          isPassed: isPassed,
-                          isNext: isNext,
-                          isFirst: isFirst,
-                          isLast: isLast,
-                        ),
-                      );
-                    }),
-                    // Runner pulse
-                    if (_myPosition != null)
-                      Marker(
-                        point: _myPosition!,
-                        width: 60,
-                        height: 60,
-                        child: _PulseMarker(isGpsReady: _gpsReady),
-                      ),
-                  ],
-                ),
-              ],
-            ),
-
-            // ── OFFLINE BANNER ──────────────────────────────
-            if (!_isOnline)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  color: const Color(0xFFFFB800),
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.wifi_off,
-                          color: Colors.black, size: 14),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Offline · ${_offlineQueue.length} point${_offlineQueue.length == 1 ? '' : 's'} queued',
-                        style: const TextStyle(
-                          color: Colors.black,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            // ── TOP BAR ─────────────────────────────────────
-            Positioned(
-              top: MediaQuery.of(context).padding.top +
-                  (_isOnline ? 8 : 34),
-              left: 12,
-              right: 12,
-              child: Row(
-                children: [
-                  _TopButton(
-                    icon: Icons.arrow_back,
-                    onTap: () async {
-                      final leave = await showDialog<bool>(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          backgroundColor: const Color(0xFF0D0D14),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
-                          title: const Text('Leave race tracking?',
-                              style: TextStyle(
-                                  color: Colors.white, fontSize: 16)),
-                          content: const Text(
-                            'Your GPS tracking will stop.',
-                            style: TextStyle(
-                                color: Color(0xFF888899), fontSize: 13),
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: const Text('Stay',
-                                  style:
-                                      TextStyle(color: Color(0xFF00FF9C))),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: const Text('Leave',
-                                  style:
-                                      TextStyle(color: Color(0xFF666680))),
-                            ),
-                          ],
-                        ),
-                      );
-                      if (leave == true && context.mounted) {
-                        Navigator.pushAndRemoveUntil(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const RunnerDashboardScreen()),
-                          (_) => false,
-                        );
-                      }
-                    },
-                  ),
-                  const SizedBox(width: 8),
-                  // Race status pill
-                  _RaceStatusPill(
-                      status: _raceStatus, raceName: _raceName),
-                  const Spacer(),
-                  // GPS pill
-                  _GpsPill(
-                      isReady: _gpsReady,
-                      accuracy: _lastPosition?.accuracy),
-                  const SizedBox(width: 8),
-                  _TopButton(
-                    icon: Icons.my_location,
-                    onTap: () {
-                      setState(() => _mapMoved = false);
-                      if (_myPosition != null) {
-                        _mapController.move(
-                            _myPosition!, _mapController.camera.zoom);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-
-            // ── BOTTOM: HUD + CHECKPOINT BAR ─────────────────
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // HUD stats
-                  _HudStrip(
-                    speedKmh: _speedKmh,
-                    pace: _paceStr,
-                    distance: _distanceStr,
-                    elapsed: _elapsedStr,
-                  ),
-                  // Checkpoint progress
-                  if (_checkpoints.isNotEmpty)
-                    _CheckpointProgressBar(
-                      checkpoints: _checkpoints,
-                      passedIds: _passedCheckpointIds,
-                      nextCheckpoint: _nextCheckpoint,
-                    ),
-                ],
-              ),
-            ),
+            _buildMap(),
+            _buildTopBar(),
+            _buildLocateMeButton(),
+            _buildBottomPanel(),
           ],
         ),
       ),
     );
   }
 
-  @override
-  void dispose() {
-    _positionSub?.cancel();
-    _connectivitySub?.cancel();
-    _hudTimer?.cancel();
-    _stopwatch.stop();
-    super.dispose();
-  }
-}
-
-// ─── RACE STATUS PILL ───────────────────────────────────────────────────────
-class _RaceStatusPill extends StatelessWidget {
-  final String status;
-  final String raceName;
-  const _RaceStatusPill({required this.status, required this.raceName});
-
-  @override
-  Widget build(BuildContext context) {
-    Color color;
-    String label;
-    switch (status) {
-      case 'active':
-        color = const Color(0xFF00FF9C);
-        label = '● Live';
-        break;
-      case 'finished':
-        color = const Color(0xFF666680);
-        label = 'Finished';
-        break;
-      default:
-        color = const Color(0xFFFFB800);
-        label = 'Not started';
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0D14).withOpacity(0.92),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.5)),
+  Widget _buildMap() {
+    return FlutterMap(
+      mapController: _mapController,
+      options: MapOptions(
+        initialCenter: _myPosition ?? const LatLng(10.3157, 123.8854),
+        initialZoom: 16,
+        onPositionChanged: (_, hasGesture) {
+          if (hasGesture && !_mapMoved) {
+            setState(() => _mapMoved = true);
+          }
+        },
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-                color: color, fontSize: 11, fontWeight: FontWeight.w700),
+      children: [
+        TileLayer(
+          urlTemplate:
+              'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+          subdomains: const ['a', 'b', 'c', 'd'],
+        ),
+
+        // Full route (grey, road-following)
+        if (_routePolyline.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _routePolyline,
+                color: const Color(0xFF333348),
+                strokeWidth: 3.0,
+              ),
+            ],
           ),
-          if (raceName.isNotEmpty) ...[
-            Text(
-              '  ·  ',
-              style: TextStyle(
-                  color: color.withOpacity(0.4), fontSize: 11),
-            ),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 100),
-              child: Text(
-                raceName,
-                style: const TextStyle(
-                    color: Color(0xFF888899), fontSize: 11),
-                overflow: TextOverflow.ellipsis,
+
+        // Remaining route (blue, road-following, dynamically updated)
+        if (_remainingPolyline.length >= 2)
+          PolylineLayer(
+            polylines: [
+              Polyline(
+                points: _remainingPolyline,
+                color: const Color(0xFF00B4FF).withOpacity(0.7),
+                strokeWidth: 3.5,
+              ),
+            ],
+          ),
+
+        // Detection radius circles
+        CircleLayer(
+          circles: _checkpoints.map((c) {
+            final isPassed = _passedCheckpointIds.contains(c.id);
+            return CircleMarker(
+              point: LatLng(c.lat, c.lng),
+              radius: c.radiusMeters.toDouble(),
+              color: (isPassed
+                      ? const Color(0xFF00FF9C)
+                      : const Color(0xFF00B4FF))
+                  .withOpacity(0.08),
+              borderColor: (isPassed
+                      ? const Color(0xFF00FF9C)
+                      : const Color(0xFF00B4FF))
+                  .withOpacity(0.4),
+              borderStrokeWidth: 1.5,
+              useRadiusInMeter: true,
+            );
+          }).toList(),
+        ),
+
+        // Checkpoint markers
+        MarkerLayer(
+          markers: [
+            ..._checkpoints.asMap().entries.map((e) {
+              final i = e.key;
+              final c = e.value;
+              final isPassed = _passedCheckpointIds.contains(c.id);
+              final isNext = c.id == _nextCheckpoint?.id;
+              return Marker(
+                point: LatLng(c.lat, c.lng),
+                width: 100,
+                height: 44,
+                child: _CheckpointMarker(
+                  cp: c,
+                  index: i,
+                  isPassed: isPassed,
+                  isNext: isNext,
+                  isFirst: i == 0,
+                  isLast: i == _checkpoints.length - 1,
+                ),
+              );
+            }),
+
+            // Runner position with pulse
+            if (_myPosition != null)
+              Marker(
+                point: _myPosition!,
+                width: 56,
+                height: 56,
+                child: _PulseMarker(isGpsReady: _gpsReady),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopBar() {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 8,
+      left: 16,
+      right: 16,
+      child: Row(
+        children: [
+          _TopButton(
+            icon: Icons.arrow_back,
+            onTap: () => Navigator.maybePop(context),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D14).withOpacity(0.92),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF1E1E30)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.flag_rounded,
+                      color: Color(0xFF00FF9C), size: 14),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _raceName.isNotEmpty
+                          ? _raceName
+                          : 'Race #$_raceId',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _raceStatus == 'active'
+                          ? const Color(0xFF00FF9C).withOpacity(0.15)
+                          : const Color(0xFF444460).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      _raceStatus.toUpperCase(),
+                      style: TextStyle(
+                          color: _raceStatus == 'active'
+                              ? const Color(0xFF00FF9C)
+                              : const Color(0xFF666680),
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
+          ),
+          const SizedBox(width: 8),
+          _TopButton(
+            icon: Icons.settings,
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+          const SizedBox(width: 6),
+          _GpsPill(
+            isReady: _gpsReady,
+            accuracy: _lastPosition?.accuracy,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLocateMeButton() {
+    return Positioned(
+      right: 16,
+      bottom: 240,
+      child: GestureDetector(
+        onTap: _centerOnMe,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D14),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _mapMoved
+                  ? const Color(0xFF00B4FF).withOpacity(0.7)
+                  : const Color(0xFF1E1E30),
+            ),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.4), blurRadius: 8),
+            ],
+          ),
+          child: Icon(
+            _mapMoved ? Icons.my_location : Icons.my_location_outlined,
+            color: _mapMoved
+                ? const Color(0xFF00B4FF)
+                : Colors.white54,
+            size: 20,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBottomPanel() {
+    return Positioned(
+      bottom: 0,
+      left: 0,
+      right: 0,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _HudStrip(
+            speedKmh: _speedKmh,
+            pace: _paceStr,
+            distance: _distanceStr,
+            elapsed: _elapsedStr,
+          ),
+          _CheckpointProgressBar(
+            checkpoints: _checkpoints,
+            passedIds: _passedCheckpointIds,
+            nextCheckpoint: _nextCheckpoint,
+          ),
         ],
       ),
     );
   }
 }
 
-// ─── HUD STRIP ──────────────────────────────────────────────────────────────
+// ── HUD strip ─────────────────────────────────────────────────────────────────
+
 class _HudStrip extends StatelessWidget {
   final double speedKmh;
   final String pace;
@@ -681,7 +760,9 @@ class _HudStrip extends StatelessWidget {
       child: Row(
         children: [
           _HudTile(
-              value: speedKmh.toStringAsFixed(1), unit: 'km/h', accent: true),
+              value: speedKmh.toStringAsFixed(1),
+              unit: 'km/h',
+              accent: true),
           _HudDivider(),
           _HudTile(value: pace, unit: '/km pace'),
           _HudDivider(),
@@ -717,11 +798,9 @@ class _HudTile extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 2),
-          Text(
-            unit,
-            style: const TextStyle(
-                color: Color(0xFF444460), fontSize: 10),
-          ),
+          Text(unit,
+              style: const TextStyle(
+                  color: Color(0xFF444460), fontSize: 10)),
         ],
       ),
     );
@@ -738,7 +817,8 @@ class _HudDivider extends StatelessWidget {
       );
 }
 
-// ─── CHECKPOINT MARKER ──────────────────────────────────────────────────────
+// ── Checkpoint marker ─────────────────────────────────────────────────────────
+
 class _CheckpointMarker extends StatelessWidget {
   final _CheckpointData cp;
   final int index;
@@ -767,7 +847,9 @@ class _CheckpointMarker extends StatelessWidget {
       fg = Colors.black;
       icon = Icons.flag;
     } else if (isLast) {
-      bg = isPassed ? const Color(0xFF00FF9C) : const Color(0xFFFF4D4D);
+      bg = isPassed
+          ? const Color(0xFF00FF9C)
+          : const Color(0xFFFF4D4D);
       fg = Colors.black;
       icon = Icons.flag_rounded;
     } else if (isPassed) {
@@ -784,47 +866,42 @@ class _CheckpointMarker extends StatelessWidget {
       icon = Icons.radio_button_unchecked;
     }
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: bg.withOpacity(isNext || isPassed ? 0.92 : 0.85),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isNext
-                  ? const Color(0xFF00B4FF)
-                  : isPassed
-                      ? const Color(0xFF00FF9C)
-                      : const Color(0xFF333348),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg.withOpacity(isNext || isPassed ? 0.92 : 0.85),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isNext
+              ? const Color(0xFF00B4FF)
+              : isPassed
+                  ? const Color(0xFF00FF9C)
+                  : const Color(0xFF333348),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: fg),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              cp.name,
+              style: TextStyle(
+                  color: fg,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 11, color: fg),
-              const SizedBox(width: 4),
-              Flexible(
-                child: Text(
-                  cp.name,
-                  style: TextStyle(
-                      color: fg,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-// ─── CHECKPOINT PROGRESS BAR ────────────────────────────────────────────────
+// ── Checkpoint progress bar ───────────────────────────────────────────────────
+
 class _CheckpointProgressBar extends StatelessWidget {
   final List<_CheckpointData> checkpoints;
   final Set<int> passedIds;
@@ -838,7 +915,8 @@ class _CheckpointProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final passed = checkpoints.where((c) => passedIds.contains(c.id)).length;
+    final passed =
+        checkpoints.where((c) => passedIds.contains(c.id)).length;
     final total = checkpoints.length;
     final allDone = passed == total && total > 0;
 
@@ -887,7 +965,8 @@ class _CheckpointProgressBar extends StatelessWidget {
               final isNext = cp.id == nextCheckpoint?.id;
               return Expanded(
                 child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
+                  margin:
+                      const EdgeInsets.symmetric(horizontal: 2),
                   height: 6,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(3),
@@ -907,7 +986,8 @@ class _CheckpointProgressBar extends StatelessWidget {
   }
 }
 
-// ─── TOP BUTTON ─────────────────────────────────────────────────────────────
+// ── Top button ────────────────────────────────────────────────────────────────
+
 class _TopButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
@@ -931,7 +1011,8 @@ class _TopButton extends StatelessWidget {
   }
 }
 
-// ─── GPS PILL ────────────────────────────────────────────────────────────────
+// ── GPS pill ──────────────────────────────────────────────────────────────────
+
 class _GpsPill extends StatelessWidget {
   final bool isReady;
   final double? accuracy;
@@ -942,7 +1023,8 @@ class _GpsPill extends StatelessWidget {
     final color =
         isReady ? const Color(0xFF00FF9C) : const Color(0xFFFFB800);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF0D0D14).withOpacity(0.92),
         borderRadius: BorderRadius.circular(20),
@@ -961,7 +1043,9 @@ class _GpsPill extends StatelessWidget {
                 ? 'GPS ±${accuracy?.toStringAsFixed(0) ?? '--'}m'
                 : 'Acquiring…',
             style: TextStyle(
-                color: color, fontSize: 11, fontWeight: FontWeight.w600),
+                color: color,
+                fontSize: 11,
+                fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -969,7 +1053,8 @@ class _GpsPill extends StatelessWidget {
   }
 }
 
-// ─── PULSE MARKER ────────────────────────────────────────────────────────────
+// ── Pulse marker ──────────────────────────────────────────────────────────────
+
 class _PulseMarker extends StatefulWidget {
   final bool isGpsReady;
   const _PulseMarker({required this.isGpsReady});
@@ -987,7 +1072,8 @@ class _PulseMarkerState extends State<_PulseMarker>
   void initState() {
     super.initState();
     _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1500))
+        vsync: this,
+        duration: const Duration(milliseconds: 1500))
       ..repeat(reverse: true);
     _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
   }
@@ -1034,7 +1120,8 @@ class _PulseMarkerState extends State<_PulseMarker>
   }
 }
 
-// ─── DATA CLASS ──────────────────────────────────────────────────────────────
+// ── Data class ────────────────────────────────────────────────────────────────
+
 class _CheckpointData {
   final int id;
   final String name;
@@ -1043,7 +1130,7 @@ class _CheckpointData {
   final int radiusMeters;
   final int orderNumber;
 
-  _CheckpointData({
+  const _CheckpointData({
     required this.id,
     required this.name,
     required this.lat,

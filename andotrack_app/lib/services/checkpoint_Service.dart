@@ -50,4 +50,23 @@ class CheckpointService {
       return [];
     }
   }
+
+  // ── Delete a checkpoint ───────────────────────────────
+
+  static Future<Map<String, dynamic>> deleteCheckpoint(int id) async {
+    try {
+      final response = await ApiService.delete('/checkpoints/$id');
+      if (response.statusCode == 200 || response.statusCode == 204) {
+        return {'success': true};
+      } else {
+        final data = jsonDecode(response.body);
+        return {
+          'success': false,
+          'message': data['detail'] ?? 'Failed to delete checkpoint.',
+        };
+      }
+    } catch (e) {
+      return {'success': false, 'message': 'Connection error: $e'};
+    }
+  }
 }

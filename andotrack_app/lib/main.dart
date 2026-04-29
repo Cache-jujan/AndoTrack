@@ -84,7 +84,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const RaceListScreen()),
+        MaterialPageRoute(builder: (_) => const RunnerDashboardScreen()),
       );
     }
   }

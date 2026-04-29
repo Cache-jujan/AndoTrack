@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
 from routes import auth, races, runners, checkpoints, leaderboard
-
+from models.result import RaceResult
 import firebase 
 import models.user
 import models.race
