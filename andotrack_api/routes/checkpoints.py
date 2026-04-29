@@ -1,3 +1,4 @@
+from utils.dependencies import get_current_user
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -78,3 +79,27 @@ def runner_progress(race_id: int, runner_id: int, db: Session = Depends(get_db))
         "total": total,
         "percent": round((completed / total) * 100, 1) if total > 0 else 0.0
     }
+
+
+@router.delete("/{checkpoint_id}")
+def delete_checkpoint(
+    checkpoint_id: int, 
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can delete checkpoints.")
+
+    checkpoint = db.query(Checkpoint).filter(Checkpoint.id == checkpoint_id).first()
+    if not checkpoint:
+        raise HTTPException(status_code=404, detail="Checkpoint not found.")
+    
+    # Also delete any runner checkpoint records tied to this checkpoint
+    db.query(RunnerCheckpoint).filter(
+        RunnerCheckpoint.checkpoint_id == checkpoint_id
+    ).delete()
+    
+    db.delete(checkpoint)
+    db.commit()
+    return {"message": f"Checkpoint {checkpoint_id} deleted."}  
