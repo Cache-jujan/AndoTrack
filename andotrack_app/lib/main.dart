@@ -8,13 +8,15 @@ import 'screens/runner_map_screen.dart';
 import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
 import 'services/notification_service.dart';
-import 'screens/runner_dashboard_screen.dart';
+import 'screens/race_list_screen.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await FirebaseAuth.instance.signInAnonymously();
   await NotificationService.init();
   runApp(const ProviderScope(child: MyApp()));
 }
