@@ -297,6 +297,50 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
               ),
             ],
 
+            const SizedBox(height: 32),
+
+            // ── Action button ────────────────────────────────
+            if (_checkingRegistration)
+              const Center(child: CircularProgressIndicator())
+            else if (isActive && _isRegistered)
+              _ActionButton(
+                label: 'Join Race →',
+                color: const Color(0xFF00FF9C),
+                textColor: Colors.black,
+                onTap: () async {
+                  final prefs = await SharedPreferences.getInstance();
+                  final raceId = race['id'] as int;
+                  await prefs.setInt('active_race_id', raceId);
+
+                  // Pre-fetch so RunnerMapScreen opens with data ready
+                  await Future.wait([
+                    ApiService.getCheckpoints(raceId),
+                    ApiService.getRaces(),
+                  ]);
+
+                  if (!context.mounted) return;
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
+                    (_) => false,
+                  );
+                },
+              )
+            else if (_isRegistered)
+              const _InfoBanner(
+                message: '✅ You are registered for this race.',
+                color: Color(0xFF00FF9C),
+              )
+            else if (canRegister)
+              _ActionButton(
+                label: 'Register',
+                color: const Color(0xFF00B4FF),
+                textColor: Colors.black,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => RaceRegistrationScreen(race: race),
             // ── Sponsors ─────────────────────────────────────
             if (race['sponsors'] != null &&
                 (race['sponsors'] as String).isNotEmpty) ...[
