@@ -11,6 +11,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../services/api_service.dart';
 import '../services/routing_service.dart';
 import 'runner_dashboard_screen.dart';
+import 'runner_checkin_gate_screen.dart';
 import 'settings_screen.dart';
 import '../services/notification_service.dart';
 
@@ -52,6 +53,9 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
   String _raceStatus = 'upcoming';
   String _raceName = '';
 
+  // ── QR Validation gate ────────────────────────────────────
+  bool _isValidated = false;
+
   // ── Connectivity + offline queue ──────────────────────────
   bool _isOnline = true;
   final List<Map<String, dynamic>> _offlineQueue = [];
@@ -73,6 +77,14 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
     _raceId = prefs.getInt('active_race_id') ?? 1;
 
     await _loadRaceStatus();
+
+    // ── QR gate: only enforce when race is active ──────────
+    if (_raceStatus == 'active' && _runnerId != null && _raceId != null) {
+      await _checkValidation();
+      if (!_isValidated) return; // don't start GPS until validated
+    }
+    // ──────────────────────────────────────────────────────
+
     await _startGPS();
     await _loadCheckpoints();
     _listenToPassedCheckpoints();
@@ -100,6 +112,48 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
         if (_raceStatus == 'active') _stopwatch.start();
       }
     } catch (_) {}
+  }
+
+  // ── QR Validation ─────────────────────────────────────────
+
+  /// Checks SharedPrefs first (survives restarts), then polls the API.
+  /// If not validated, opens RunnerCheckinGateScreen and waits.
+  Future<void> _checkValidation() async {
+    // 1. Local cache — no API call needed
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('qr_validated_$_raceId') == true) {
+      if (mounted) setState(() => _isValidated = true);
+      return;
+    }
+
+    // 2. Ask the server
+    try {
+      final data = await ApiService.getRunnerQr(
+        runnerId: _runnerId!,
+        raceId: _raceId!,
+      );
+      if (data['is_present'] == true) {
+        await prefs.setBool('qr_validated_$_raceId', true);
+        if (mounted) setState(() => _isValidated = true);
+        return;
+      }
+    } catch (_) {}
+
+    // 3. Not validated — show the gate screen
+    if (!mounted) return;
+    final validated = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RunnerCheckinGateScreen(
+          raceId: _raceId!,
+          runnerId: _runnerId!,
+          raceName: _raceName,
+        ),
+      ),
+    );
+    if (validated == true && mounted) {
+      setState(() => _isValidated = true);
+    }
   }
 
   // ── Connectivity ──────────────────────────────────────────

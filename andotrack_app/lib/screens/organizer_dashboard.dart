@@ -23,6 +23,7 @@ import 'leaderboard_screen.dart';
 import 'races_screen.dart';
 import 'settings_screen.dart';
 import 'checkpoint_placement_screen.dart';
+import 'organizer_qr_scanner_screen.dart';
 
 const _runnerColors = [
   Color(0xFF00FF9C),
@@ -442,6 +443,30 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
                   ),
                 ],
               ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // QR Check-In Scanner button
+          GestureDetector(
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => OrganizerQrScannerScreen(
+                  raceId: _raceId,
+                  raceName: _raceName ?? 'Race #$_raceId',
+                ),
+              ),
+            ),
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D14).withOpacity(0.92),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF1E1E30)),
+              ),
+              child: const Icon(Icons.qr_code_scanner,
+                  color: Color(0xFF00FF9C), size: 20),
             ),
           ),
           const SizedBox(width: 8),

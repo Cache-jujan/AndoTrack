@@ -39,9 +39,13 @@ dependencies:
   # Storage
   shared_preferences: ^2.2.0
 
-# QR
+  # QR
   qr_flutter: ^4.1.0
   gal: ^2.3.0
+
+  # Camera
+  mobile_scanner: ^5.2.3
+  permission_handler: ^11.3.1
 
   cupertino_icons: ^1.0.8
 
