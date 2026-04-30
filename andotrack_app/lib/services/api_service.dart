@@ -249,6 +249,7 @@ class ApiService {
 
   static Future<List<Map<String, dynamic>>> getLeaderboard(
       int raceId) async {
+    final headers = await _authHeaders();
     final res = await http.get(
       Uri.parse('$_base/leaderboard/$raceId'),
       headers: headers,
@@ -362,4 +363,51 @@ class ApiService {
       throw Exception(body['detail'] ?? 'Failed to delete checkpoint');
     }
   }
+
+  // ── QR Check-In ───────────────────────────────────────────────────────────
+
+  /// Organizer scans a runner's QR → POST /races/{race_id}/checkin
+  /// Throws [ApiException] with the server's error message on failure.
+  static Future<Map<String, dynamic>> checkInRunner({
+    required int raceId,
+    required String qrToken,
+  }) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$_base/races/$raceId/checkin'),
+      headers: headers,
+      body: jsonEncode({'qr_token': qrToken}),
+    );
+    final body = jsonDecode(response.body);
+    if (response.statusCode == 200) {
+      return body as Map<String, dynamic>;
+    }
+    final detail = body['detail']?.toString() ?? 'Check-in failed.';
+    throw ApiException(detail);
+  }
+
+  /// Runner polls validation status → GET /runners/{runner_id}/qr?race_id=X
+  static Future<Map<String, dynamic>> getRunnerQr({
+    required int runnerId,
+    required int raceId,
+  }) async {
+    final headers = await _authHeaders();
+    final response = await http.get(
+      Uri.parse('$_base/runners/$runnerId/qr?race_id=$raceId'),
+      headers: headers,
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Could not fetch QR status.');
+  }
+}
+
+// ── ApiException ──────────────────────────────────────────────────────────────
+
+class ApiException implements Exception {
+  final String message;
+  const ApiException(this.message);
+  @override
+  String toString() => message;
 }
