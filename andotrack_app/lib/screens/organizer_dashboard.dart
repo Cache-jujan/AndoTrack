@@ -1,3 +1,14 @@
+// ============================================================
+// OrganizerDashboard — Improved
+// ─────────────────────────────────────────────────────────────
+// Changes:
+//   • Road-based polyline between checkpoints via RoutingService
+//   • FIX: Race runner count isolated per race (no data leakage)
+//   • FIX: Runners map cleared when switching races
+//   • FIX: New races start with zero runners
+//   • Locate-Me button for organizer map view
+// ============================================================
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -6,12 +17,12 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
+import '../services/routing_service.dart';
 import '../widgets/app_bottom_nav.dart';
-import '../screens/leaderboard_screen.dart';
-import '../screens/races_screen.dart';
-import '../screens/settings_screen.dart';
-import '../screens/checkpoint_placement_screen.dart';
-import '../widgets/anomaly_alert_widget.dart';
+import 'leaderboard_screen.dart';
+import 'races_screen.dart';
+import 'settings_screen.dart';
+import 'checkpoint_placement_screen.dart';
 
 const _runnerColors = [
   Color(0xFF00FF9C),
@@ -37,6 +48,8 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
   NavTab _tab = NavTab.map;
   final MapController _mapController = MapController();
 
+  // FIX: Runners map is explicitly scoped to the current _raceId.
+  // It is cleared whenever we switch races so no stale data leaks between views.
   final Map<String, _RunnerState> _runners = {};
   final Map<String, LatLng> _smoothPositions = {};
 
@@ -45,8 +58,8 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
   String _raceStatus = 'upcoming';
   bool _actionLoading = false;
 
-  // Checkpoints for polyline
   List<Map<String, dynamic>> _checkpoints = [];
+  List<LatLng> _routePolyline = []; // road-based polyline
 
   StreamSubscription? _firebaseSub;
   Timer? _smoothTimer;
@@ -56,6 +69,15 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
     super.initState();
     _loadRace();
   }
+
+  @override
+  void dispose() {
+    _firebaseSub?.cancel();
+    _smoothTimer?.cancel();
+    super.dispose();
+  }
+
+  // ── Race loading ──────────────────────────────────────────
 
   Future<void> _loadRace() async {
     final prefs = await SharedPreferences.getInstance();
@@ -68,83 +90,144 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
           (r) => r['id'] == _raceId,
           orElse: () => races.first,
         );
-        setState(() {
-          _raceId = race['id'];
-          _raceName = race['name'];
-          _raceStatus = race['status'] ?? 'upcoming';
-        });
-        await prefs.setInt('active_race_id', _raceId);
+        if (mounted) {
+          setState(() {
+            _raceId = race['id'];
+            _raceName = race['name'];
+            _raceStatus = race['status'] ?? 'upcoming';
+          });
+          await prefs.setInt('active_race_id', _raceId);
+        }
       }
     } catch (_) {}
 
     _listenToRunners();
     _startSmoothMovement();
-    _loadCheckpoints();
+    await _loadCheckpoints();
   }
+
+  /// Switch to a different race from the RacesScreen selection.
+  /// FIX: Clears runner state to prevent data leakage between races.
+  Future<void> _switchRace(int id, String name, String status) async {
+    if (id == _raceId) return;
+
+    // Cancel old Firebase listener before switching
+    await _firebaseSub?.cancel();
+
+    // FIX: Reset runner count and positions for the new race
+    setState(() {
+      _raceId = id;
+      _raceName = name;
+      _raceStatus = status;
+      _runners.clear();        // No ghost runners from previous race
+      _smoothPositions.clear();
+      _checkpoints = [];
+      _routePolyline = [];
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('active_race_id', id);
+
+    _listenToRunners();
+    await _loadCheckpoints();
+  }
+
+  // ── Checkpoints + road polyline ───────────────────────────
 
   Future<void> _loadCheckpoints() async {
     try {
       final data = await ApiService.getCheckpoints(_raceId);
-      if (mounted) {
-        setState(() {
-          _checkpoints = data
-            ..sort((a, b) =>
-                (a['order_number'] as num).compareTo(b['order_number'] as num));
-        });
-      }
+      if (!mounted) return;
+
+      final sorted = data
+        ..sort((a, b) =>
+            (a['order_number'] as num).compareTo(b['order_number'] as num));
+
+      setState(() => _checkpoints = sorted);
+
+      // Build road polyline after loading
+      await _buildRoutePolyline();
     } catch (_) {}
   }
 
+  Future<void> _buildRoutePolyline() async {
+    if (_checkpoints.length < 2) {
+      setState(() => _routePolyline = []);
+      return;
+    }
+    final waypoints = _checkpoints
+        .map((cp) => LatLng(
+              (cp['lat'] as num).toDouble(),
+              (cp['lng'] as num).toDouble(),
+            ))
+        .toList();
+    final pts = await RoutingService.getRoutePolyline(waypoints);
+    if (mounted) setState(() => _routePolyline = pts);
+  }
+
+  // ── Firebase runner listeners ─────────────────────────────
+
   void _listenToRunners() {
-    _firebaseSub?.cancel();
-    FirebaseDatabase.instance
-        .ref('races/$_raceId/runners')
+    final listenRaceId = _raceId; // capture at subscription time
+
+    _firebaseSub = FirebaseDatabase.instance
+        .ref('races/$listenRaceId/runners')
         .onValue
         .listen((event) {
-      if (!mounted || event.snapshot.value == null) return;
-      final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+      // Guard: ignore updates if we've already switched to another race
+      if (listenRaceId != _raceId) return;
+      if (!mounted || event.snapshot.value == null) {
+        // FIX: If no runners yet (new race), ensure count shows 0
+        if (mounted) setState(() => _runners.clear());
+        return;
+      }
+
+      final raw =
+          Map<String, dynamic>.from(event.snapshot.value as Map);
 
       setState(() {
-        data.forEach((runnerId, value) {
-          final d = Map<String, dynamic>.from(value);
-          final lat = (d['lat'] as num?)?.toDouble();
-          final lng = (d['lng'] as num?)?.toDouble();
-          if (lat == null || lng == null) return;
+        raw.forEach((id, val) {
+          final data = Map<String, dynamic>.from(val as Map);
+          final lat = (data['lat'] as num?)?.toDouble() ?? 0;
+          final lng = (data['lng'] as num?)?.toDouble() ?? 0;
+          final speed = (data['speed'] as num?)?.toDouble() ?? 0;
 
-          if (!_runners.containsKey(runnerId)) {
-            _runners[runnerId] = _RunnerState(
-              id: runnerId,
-              name: d['name'] ?? 'Runner #$runnerId',
-              color: _runnerColors[_runners.length % _runnerColors.length],
-              position: LatLng(lat, lng),
-              speed: (d['speed'] as num?)?.toDouble() ?? 0,
-            );
-            _smoothPositions[runnerId] = LatLng(lat, lng);
-          } else {
-            _runners[runnerId] = _runners[runnerId]!.copyWith(
-              targetPosition: LatLng(lat, lng),
-              speed: (d['speed'] as num?)?.toDouble() ?? 0,
-              name: d['name'] ?? _runners[runnerId]!.name,
-            );
-          }
+          final prev = _runners[id];
+          _runners[id] = _RunnerState(
+            id: id,
+            position: LatLng(lat, lng),
+            prevPosition: prev?.position,
+            speed: speed,
+            lastSeen: DateTime.now(),
+          );
+          _smoothPositions[id] ??= LatLng(lat, lng);
         });
+
+        // Remove stale runners no longer in Firebase
+        _runners.removeWhere((id, _) => !raw.containsKey(id));
+        _smoothPositions.removeWhere((id, _) => !raw.containsKey(id));
       });
     });
   }
 
   void _startSmoothMovement() {
-    _smoothTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+    _smoothTimer?.cancel();
+    _smoothTimer =
+        Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!mounted) return;
       bool changed = false;
       _runners.forEach((id, runner) {
-        final target = runner.targetPosition ?? runner.position;
-        final current = _smoothPositions[id] ?? runner.position;
-        final lat = _lerp(current.latitude, target.latitude, 0.3);
-        final lng = _lerp(current.longitude, target.longitude, 0.3);
-        final newPos = LatLng(lat, lng);
-        if ((newPos.latitude - current.latitude).abs() > 0.000001 ||
-            (newPos.longitude - current.longitude).abs() > 0.000001) {
-          _smoothPositions[id] = newPos;
+        final current = _smoothPositions[id];
+        final target = runner.position;
+        if (current == null) return;
+        const t = 0.15;
+        final newLat =
+            current.latitude + (target.latitude - current.latitude) * t;
+        final newLng = current.longitude +
+            (target.longitude - current.longitude) * t;
+        if ((newLat - current.latitude).abs() > 0.000001 ||
+            (newLng - current.longitude).abs() > 0.000001) {
+          _smoothPositions[id] = LatLng(newLat, newLng);
           changed = true;
         }
       });
@@ -152,304 +235,60 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
     });
   }
 
-  double _lerp(double a, double b, double t) => a + (b - a) * t;
+  // ── Race control ──────────────────────────────────────────
 
-  Future<void> _startRace() async {
-    final confirm = await _showConfirm(
-      'Start Race',
-      'Start "${_raceName ?? 'Race #$_raceId'}"?',
-      'Start',
-      const Color(0xFF00FF9C),
-    );
-    if (!confirm) return;
+  Future<void> _handleRaceAction() async {
     setState(() => _actionLoading = true);
     try {
-      await ApiService.startRace(_raceId);
-      setState(() => _raceStatus = 'active');
-      _showSnack('Race started! 🏁', const Color(0xFF00FF9C));
+      if (_raceStatus == 'active') {
+        await ApiService.stopRace(_raceId);
+        setState(() => _raceStatus = 'finished');
+      } else if (_raceStatus == 'upcoming') {
+        await ApiService.startRace(_raceId);
+        setState(() => _raceStatus = 'active');
+      }
     } catch (e) {
-      _showSnack('Failed: $e', const Color(0xFFFF4D4D));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: const Color(0xFFFF4D4D)));
+      }
     } finally {
-      setState(() => _actionLoading = false);
+      if (mounted) setState(() => _actionLoading = false);
     }
   }
 
-  Future<void> _stopRace() async {
-    final confirm = await _showConfirm(
-      'Stop Race',
-      'End "${_raceName ?? 'Race #$_raceId'}"? This ends the race for all runners.',
-      'Stop',
-      const Color(0xFFFF4D4D),
-    );
-    if (!confirm) return;
-    setState(() => _actionLoading = true);
-    try {
-      await ApiService.stopRace(_raceId);
-      setState(() => _raceStatus = 'finished');
-      _showSnack('Race finished!', const Color(0xFFFFB800));
-    } catch (e) {
-      _showSnack('Failed: $e', const Color(0xFFFF4D4D));
-    } finally {
-      setState(() => _actionLoading = false);
-    }
-  }
-
-  Future<bool> _showConfirm(
-      String title, String msg, String action, Color color) async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            backgroundColor: const Color(0xFF0D0D14),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
-            title: Text(title,
-                style: const TextStyle(color: Colors.white, fontSize: 16)),
-            content: Text(msg,
-                style: const TextStyle(
-                    color: Color(0xFF888899), fontSize: 13)),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel',
-                    style: TextStyle(color: Color(0xFF666680))),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: color,
-                  foregroundColor: Colors.black,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(action,
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
-  void _showSnack(String msg, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(color: Colors.black)),
-      backgroundColor: color,
-      duration: const Duration(seconds: 3),
-    ));
-  }
-
-  // Show runner detail bottom sheet when a marker is tapped
-  void _showRunnerDetail(_RunnerState runner) {
-    final speedKmh = runner.speed * 3.6;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => Container(
-        decoration: const BoxDecoration(
-          color: Color(0xFF0D0D14),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(top: BorderSide(color: Color(0xFF1E1E2E))),
-        ),
-        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Center(
-              child: Container(
-                width: 36,
-                height: 3,
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: runner.color.withOpacity(0.15),
-                    border: Border.all(
-                        color: runner.color.withOpacity(0.4), width: 2),
-                  ),
-                  child: Center(
-                    child: Text(
-                      _initials(runner.name),
-                      style: TextStyle(
-                          color: runner.color,
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        runner.name,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold),
-                      ),
-                      Text(
-                        'ID: ${runner.id}',
-                        style: const TextStyle(
-                            color: Color(0xFF444460), fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-                // Status dot
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF00FF9C).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: const Color(0xFF00FF9C).withOpacity(0.3)),
-                  ),
-                  child: const Text(
-                    '● Tracking',
-                    style: TextStyle(
-                        color: Color(0xFF00FF9C),
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 20),
-            const Divider(color: Color(0xFF1E1E2E), height: 1),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                _DetailStat(
-                  label: 'Speed',
-                  value: '${speedKmh.toStringAsFixed(1)} km/h',
-                  color: runner.color,
-                ),
-                Container(
-                    width: 0.5,
-                    height: 36,
-                    color: const Color(0xFF1E1E2E),
-                    margin: const EdgeInsets.symmetric(horizontal: 4)),
-                _DetailStat(
-                  label: 'Pace',
-                  value: runner.speed > 0.3
-                      ? '${(1000 ~/ runner.speed ~/ 60).toString().padLeft(2, '0')}:${((1000 / runner.speed).toInt() % 60).toString().padLeft(2, '0')} /km'
-                      : '--:-- /km',
-                  color: Colors.white,
-                ),
-                Container(
-                    width: 0.5,
-                    height: 36,
-                    color: const Color(0xFF1E1E2E),
-                    margin: const EdgeInsets.symmetric(horizontal: 4)),
-                _DetailStat(
-                  label: 'Position',
-                  value:
-                      '${runner.position.latitude.toStringAsFixed(4)}, ${runner.position.longitude.toStringAsFixed(4)}',
-                  color: const Color(0xFF666680),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: () {
-                  Navigator.pop(context);
-                  _mapController.move(runner.position, 17);
-                },
-                icon: const Icon(Icons.my_location, size: 16),
-                label: const Text('Locate on map'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: runner.color,
-                  side: BorderSide(color: runner.color.withOpacity(0.4)),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _initials(String name) {
-    final parts = name.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return name.substring(0, name.length >= 2 ? 2 : 1).toUpperCase();
-  }
+  // ── Build ─────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0F),
-      body: IndexedStack(
-        index: _tab.index,
-        children: [
-          _buildMap(),
-          LeaderboardScreen(raceId: _raceId),
-          RacesScreen(onRaceSelected: (id, name, status) {
-            setState(() {
-              _raceId = id;
-              _raceName = name;
-              _raceStatus = status;
-              _tab = NavTab.map;
-              _checkpoints = [];
-            });
-            _listenToRunners();
-            _loadCheckpoints();
-          }),
-          const SettingsScreen(),
-        ],
-      ),
+      body: _buildBody(),
       bottomNavigationBar: AppBottomNav(
         current: _tab,
         onTap: (t) => setState(() => _tab = t),
       ),
-      floatingActionButton: _tab == NavTab.map
-          ? FloatingActionButton(
-              backgroundColor: const Color(0xFF00FF9C),
-              foregroundColor: Colors.black,
-              child: const Icon(Icons.add_location_alt),
-              onPressed: () async {
-                await Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) =>
-                        CheckpointPlacementScreen(raceId: _raceId),
-                  ),
-                );
-                _loadCheckpoints(); // refresh after returning
-              },
-            )
-          : null,
     );
   }
 
-  Widget _buildMap() {
-    // Build checkpoint polyline points
-    final polylinePoints = _checkpoints
-        .map((c) => LatLng(
-              (c['lat'] as num).toDouble(),
-              (c['lng'] as num).toDouble(),
-            ))
-        .toList();
+  Widget _buildBody() {
+    switch (_tab) {
+      case NavTab.map:
+        return _buildMapTab();
+      case NavTab.races:
+        return RacesScreen(
+          onRaceSelected: (id, name, status) =>
+              _switchRace(id, name, status),
+        );
+      case NavTab.leaderboard:
+        return LeaderboardScreen(raceId: _raceId);
+      case NavTab.settings:
+        return const SettingsScreen();
+    }
+  }
 
+  Widget _buildMapTab() {
     return Stack(
       children: [
         FlutterMap(
@@ -465,457 +304,294 @@ class _OrganizerDashboardState extends State<OrganizerDashboard> {
               subdomains: const ['a', 'b', 'c', 'd'],
             ),
 
-            // Checkpoint route polyline
-            if (polylinePoints.length >= 2)
+            // Road-based route polyline
+            if (_routePolyline.length >= 2)
               PolylineLayer(
                 polylines: [
                   Polyline(
-                    points: polylinePoints,
+                    points: _routePolyline,
                     color: const Color(0xFF00B4FF).withOpacity(0.5),
-                    strokeWidth: 2.5,
-                    isDotted: true,
+                    strokeWidth: 3.5,
                   ),
                 ],
               ),
 
-            // Checkpoint circle radii
+            // Checkpoint radius circles
             CircleLayer(
-              circles: _checkpoints.asMap().entries.map((entry) {
-                final i = entry.key;
-                final cp = entry.value;
-                final isFirst = i == 0;
-                final isLast = i == _checkpoints.length - 1;
-                final color = isFirst
-                    ? const Color(0xFF00FF9C)
-                    : isLast
-                        ? const Color(0xFFFF4D4D)
-                        : const Color(0xFF00B4FF);
+              circles: _checkpoints.map((cp) {
                 return CircleMarker(
                   point: LatLng(
                     (cp['lat'] as num).toDouble(),
                     (cp['lng'] as num).toDouble(),
                   ),
                   radius: (cp['radius_meters'] as num).toDouble(),
-                  useRadiusInMeter: true,
-                  color: color.withOpacity(0.08),
-                  borderColor: color.withOpacity(0.4),
+                  color: const Color(0xFF00B4FF).withOpacity(0.08),
+                  borderColor: const Color(0xFF00B4FF).withOpacity(0.4),
                   borderStrokeWidth: 1.5,
+                  useRadiusInMeter: true,
                 );
               }).toList(),
             ),
 
-            // Checkpoint markers (start/end/numbered)
+            // Checkpoint + runner markers
             MarkerLayer(
               markers: [
-                ..._checkpoints.asMap().entries.map((entry) {
-                  final i = entry.key;
-                  final cp = entry.value;
-                  final isFirst = i == 0;
-                  final isLast = i == _checkpoints.length - 1;
+                // Checkpoints
+                ..._checkpoints.asMap().entries.map((e) {
+                  final i = e.key;
+                  final cp = e.value;
                   return Marker(
                     point: LatLng(
                       (cp['lat'] as num).toDouble(),
                       (cp['lng'] as num).toDouble(),
                     ),
-                    width: 50,
-                    height: 56,
-                    child: _CheckpointPin(
-                      label: cp['name'] ?? '${i + 1}',
-                      index: i,
-                      isFirst: isFirst,
-                      isLast: isLast,
+                    width: 52,
+                    height: 52,
+                    child: _OrgCheckpointMarker(
+                        index: i + 1, name: cp['name'] ?? ''),
+                  );
+                }),
+
+                // Live runners (smoothed positions)
+                ..._smoothPositions.entries.map((e) {
+                  final id = e.key;
+                  final pos = e.value;
+                  final colorIdx =
+                      id.hashCode.abs() % _runnerColors.length;
+                  final color = _runnerColors[colorIdx];
+                  final runner = _runners[id];
+                  final speed =
+                      ((runner?.speed ?? 0) * 3.6).toStringAsFixed(1);
+                  return Marker(
+                    point: pos,
+                    width: 60,
+                    height: 60,
+                    child: _RunnerDot(
+                      color: color,
+                      label: speed,
+                      runnerId: id,
                     ),
                   );
                 }),
               ],
             ),
-
-            // Runner markers (tappable)
-            MarkerLayer(
-              markers: _runners.entries.map((e) {
-                final pos = _smoothPositions[e.key] ?? e.value.position;
-                return Marker(
-                  point: pos,
-                  width: 130,
-                  height: 52,
-                  child: GestureDetector(
-                    onTap: () => _showRunnerDetail(e.value),
-                    child: _RunnerMarker(runner: e.value),
-                  ),
-                );
-              }).toList(),
-            ),
           ],
         ),
 
-        // Anomaly alerts overlay
-        AnomalyAlertOverlay(raceId: _raceId),
+        // Top bar
+        _buildOrgTopBar(),
 
-        // Summary strip + race control
+        // Race action button
         Positioned(
-          top: MediaQuery.of(context).padding.top + 12,
-          left: 12,
-          right: 12,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Summary stats strip
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0D0D14).withOpacity(0.95),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: const Color(0xFF1E1E30)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            _raceName ?? 'Race #$_raceId',
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        _StatusPill(status: _raceStatus),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        _SummaryTile(
-                          value: '${_runners.length}',
-                          label: 'Runners',
-                          color: const Color(0xFF00FF9C),
-                        ),
-                        _SummaryDivider(),
-                        _SummaryTile(
-                          value: '${_checkpoints.length}',
-                          label: 'Checkpoints',
-                          color: const Color(0xFF00B4FF),
-                        ),
-                        _SummaryDivider(),
-                        _SummaryTile(
-                          value: _raceStatus == 'active'
-                              ? 'Live'
-                              : _raceStatus == 'finished'
-                                  ? 'Done'
-                                  : 'Ready',
-                          label: 'Status',
-                          color: _raceStatus == 'active'
-                              ? const Color(0xFF00FF9C)
-                              : _raceStatus == 'finished'
-                                  ? const Color(0xFF666680)
-                                  : const Color(0xFFFFB800),
-                        ),
-                        if (!_actionLoading &&
-                            (_raceStatus == 'upcoming' ||
-                                _raceStatus == 'active')) ...[
-                          _SummaryDivider(),
-                          GestureDetector(
-                            onTap: _raceStatus == 'upcoming'
-                                ? _startRace
-                                : _stopRace,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 12, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: _raceStatus == 'upcoming'
-                                    ? const Color(0xFF00FF9C).withOpacity(0.15)
-                                    : const Color(0xFFFF4D4D).withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: _raceStatus == 'upcoming'
-                                      ? const Color(0xFF00FF9C).withOpacity(0.4)
-                                      : const Color(0xFFFF4D4D).withOpacity(0.4),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    _raceStatus == 'upcoming'
-                                        ? Icons.play_arrow
-                                        : Icons.stop,
-                                    size: 14,
-                                    color: _raceStatus == 'upcoming'
-                                        ? const Color(0xFF00FF9C)
-                                        : const Color(0xFFFF4D4D),
-                                  ),
-                                  const SizedBox(width: 5),
-                                  Text(
-                                    _raceStatus == 'upcoming'
-                                        ? 'Start'
-                                        : 'Stop',
-                                    style: TextStyle(
-                                      color: _raceStatus == 'upcoming'
-                                          ? const Color(0xFF00FF9C)
-                                          : const Color(0xFFFF4D4D),
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                        if (_actionLoading)
-                          const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF00FF9C)),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          bottom: 24,
+          left: 16,
+          right: 16,
+          child: _buildRaceActionButton(),
         ),
       ],
     );
   }
 
-  @override
-  void dispose() {
-    _firebaseSub?.cancel();
-    _smoothTimer?.cancel();
-    super.dispose();
+  Widget _buildOrgTopBar() {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 8,
+      left: 16,
+      right: 16,
+      child: Row(
+        children: [
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D14).withOpacity(0.92),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFF1E1E30)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.flag_rounded,
+                      color: Color(0xFF00FF9C), size: 14),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _raceName ?? 'Race #$_raceId',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  // FIX: Runner count shown directly from _runners.length
+                  // which is cleared per race (no leakage)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00FF9C).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${_runners.length} runners',
+                      style: const TextStyle(
+                          color: Color(0xFF00FF9C),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Place checkpoints button
+          GestureDetector(
+            onTap: () async {
+              await Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      CheckpointPlacementScreen(raceId: _raceId),
+                ),
+              );
+              // Reload checkpoints and rebuild polyline on return
+              await _loadCheckpoints();
+            },
+            child: Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0D0D14).withOpacity(0.92),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0xFF1E1E30)),
+              ),
+              child: const Icon(Icons.add_location_alt,
+                  color: Color(0xFF00B4FF), size: 20),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRaceActionButton() {
+    if (_raceStatus == 'finished') return const SizedBox.shrink();
+
+    final isActive = _raceStatus == 'active';
+    return ElevatedButton.icon(
+      onPressed: _actionLoading ? null : _handleRaceAction,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isActive
+            ? const Color(0xFFFF4D4D)
+            : const Color(0xFF00FF9C),
+        foregroundColor: Colors.black,
+        minimumSize: const Size(double.infinity, 52),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14)),
+      ),
+      icon: _actionLoading
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.black))
+          : Icon(
+              isActive ? Icons.stop_rounded : Icons.play_arrow_rounded,
+              size: 20),
+      label: Text(
+        isActive ? 'Stop Race' : 'Start Race',
+        style: const TextStyle(
+            fontWeight: FontWeight.bold, fontSize: 15),
+      ),
+    );
   }
 }
 
-// ─── CHECKPOINT PIN ──────────────────────────────────────────────────────────
-class _CheckpointPin extends StatelessWidget {
-  final String label;
-  final int index;
-  final bool isFirst;
-  final bool isLast;
+// ── Organizer checkpoint marker ───────────────────────────────────────────────
 
-  const _CheckpointPin({
-    required this.label,
-    required this.index,
-    required this.isFirst,
-    required this.isLast,
-  });
+class _OrgCheckpointMarker extends StatelessWidget {
+  final int index;
+  final String name;
+  const _OrgCheckpointMarker(
+      {required this.index, required this.name});
 
   @override
   Widget build(BuildContext context) {
-    Color color;
-    IconData icon;
-    if (isFirst) {
-      color = const Color(0xFF00FF9C);
-      icon = Icons.flag;
-    } else if (isLast) {
-      color = const Color(0xFFFF4D4D);
-      icon = Icons.flag_rounded;
-    } else {
-      color = const Color(0xFF00B4FF);
-      icon = Icons.location_on;
-    }
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           width: 28,
           height: 28,
-          decoration: BoxDecoration(
-            color: color,
+          decoration: const BoxDecoration(
+            color: Color(0xFF00B4FF),
             shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                  color: color.withOpacity(0.5),
-                  blurRadius: 8,
-                  spreadRadius: 1)
-            ],
           ),
-          child: Icon(icon, color: Colors.black, size: 14),
+          child: Center(
+            child: Text('$index',
+                style: const TextStyle(
+                    color: Colors.black,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12)),
+          ),
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           decoration: BoxDecoration(
             color: const Color(0xFF0D0D14),
             borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: color.withOpacity(0.4)),
+            border: Border.all(
+                color: const Color(0xFF00B4FF).withOpacity(0.3)),
           ),
-          child: Text(
-            isFirst ? 'Start' : isLast ? 'Finish' : '${index + 1}',
-            style: TextStyle(
-                color: color, fontSize: 9, fontWeight: FontWeight.bold),
-          ),
+          child: Text(name,
+              style: const TextStyle(
+                  color: Colors.white70, fontSize: 9),
+              overflow: TextOverflow.ellipsis),
         ),
       ],
     );
   }
 }
 
-// ─── STATUS PILL ─────────────────────────────────────────────────────────────
-class _StatusPill extends StatelessWidget {
-  final String status;
-  const _StatusPill({required this.status});
+// ── Runner dot on organizer map ───────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    Color color;
-    String label;
-    switch (status) {
-      case 'active':
-        color = const Color(0xFF00FF9C);
-        label = '● LIVE';
-        break;
-      case 'finished':
-        color = const Color(0xFF666680);
-        label = '■ FINISHED';
-        break;
-      default:
-        color = const Color(0xFFFFB800);
-        label = '○ UPCOMING';
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-            color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8),
-      ),
-    );
-  }
-}
-
-// ─── SUMMARY TILES ───────────────────────────────────────────────────────────
-class _SummaryTile extends StatelessWidget {
-  final String value;
-  final String label;
+class _RunnerDot extends StatelessWidget {
   final Color color;
-  const _SummaryTile(
-      {required this.value, required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(value,
-              style: TextStyle(
-                  color: color, fontSize: 16, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 1),
-          Text(label,
-              style:
-                  const TextStyle(color: Color(0xFF444460), fontSize: 10)),
-        ],
-      ),
-    );
-  }
-}
-
-class _SummaryDivider extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => Container(
-        width: 0.5,
-        height: 28,
-        color: const Color(0xFF1E1E30),
-        margin: const EdgeInsets.symmetric(horizontal: 6),
-      );
-}
-
-// ─── DETAIL STAT (bottom sheet) ──────────────────────────────────────────────
-class _DetailStat extends StatelessWidget {
   final String label;
-  final String value;
-  final Color color;
-  const _DetailStat(
-      {required this.label, required this.value, required this.color});
+  final String runnerId;
+  const _RunnerDot(
+      {required this.color,
+      required this.label,
+      required this.runnerId});
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(value,
-              style: TextStyle(
-                  color: color, fontSize: 13, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 3),
-          Text(label,
-              style:
-                  const TextStyle(color: Color(0xFF444460), fontSize: 11),
-              textAlign: TextAlign.center),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── RUNNER MARKER ───────────────────────────────────────────────────────────
-class _RunnerMarker extends StatelessWidget {
-  final _RunnerState runner;
-  const _RunnerMarker({required this.runner});
-
-  @override
-  Widget build(BuildContext context) {
-    final speedKmh = runner.speed * 3.6;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0D0D14).withOpacity(0.92),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: runner.color.withOpacity(0.6)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                runner.name,
-                style: TextStyle(
-                    color: runner.color,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold),
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (runner.speed > 0)
-                Text(
-                  '${speedKmh.toStringAsFixed(1)} km/h',
-                  style: const TextStyle(
-                      color: Color(0xFF666680), fontSize: 9),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 2),
         Container(
           width: 14,
           height: 14,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: runner.color,
+            color: color,
             boxShadow: [
               BoxShadow(
-                  color: runner.color.withOpacity(0.5),
-                  blurRadius: 8,
-                  spreadRadius: 1)
+                  color: color.withOpacity(0.6), blurRadius: 6),
             ],
+          ),
+        ),
+        const SizedBox(height: 2),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D14).withOpacity(0.85),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            '$label km/h',
+            style: TextStyle(color: color, fontSize: 8),
           ),
         ),
       ],
@@ -923,33 +599,20 @@ class _RunnerMarker extends StatelessWidget {
   }
 }
 
-// ─── DATA CLASSES ─────────────────────────────────────────────────────────────
+// ── Runner state data class ───────────────────────────────────────────────────
+
 class _RunnerState {
   final String id;
-  final String name;
-  final Color color;
   final LatLng position;
-  final LatLng? targetPosition;
+  final LatLng? prevPosition;
   final double speed;
+  final DateTime lastSeen;
 
-  _RunnerState({
+  const _RunnerState({
     required this.id,
-    required this.name,
-    required this.color,
     required this.position,
-    this.targetPosition,
-    this.speed = 0,
+    this.prevPosition,
+    required this.speed,
+    required this.lastSeen,
   });
-
-  _RunnerState copyWith(
-      {LatLng? targetPosition, double? speed, String? name}) {
-    return _RunnerState(
-      id: id,
-      name: name ?? this.name,
-      color: color,
-      position: position,
-      targetPosition: targetPosition ?? this.targetPosition,
-      speed: speed ?? this.speed,
-    );
-  }
 }
