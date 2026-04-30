@@ -4,9 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
 class ApiService {
-  static String get _base => AppConfig.baseUrl; 
-
-  // ── Auth ──────────────────────────────────────────────────
+  static String get _base => AppConfig.baseUrl;
 
   static Future<Map<String, dynamic>> login(
     String email,
@@ -30,6 +28,7 @@ class ApiService {
           'name': body['name'],
         };
       }
+
       return {'success': false, 'message': body['detail'] ?? 'Login failed'};
     } catch (e) {
       return {'success': false, 'message': 'Connection error: $e'};
@@ -65,6 +64,7 @@ class ApiService {
           'name': body['name'],
         };
       }
+
       return {
         'success': false,
         'message': body['detail'] ?? 'Registration failed',
@@ -74,34 +74,38 @@ class ApiService {
     }
   }
 
-static Future<Map<String, dynamic>> registerForRace({
-  required int raceId,
-  required String city,
-  required String contactNumber,
-  required String emergencyContact,
-  required String email, 
-  required bool isFirstMarathon,
-  required String sex,
-}) async {
-  final headers = await _authHeaders();
-  final res = await http.post(
-    Uri.parse('$_base/races/$raceId/register'),
-    headers: headers,
-    body: jsonEncode({
-      'city': city,
-      'contact_number': contactNumber,
-      'emergency_contact': emergencyContact,
-      'is_first_marathon': isFirstMarathon,
-      'sex': sex,
-      'email': email
-    }),
-  );
-  if (res.statusCode == 200) {
-    return jsonDecode(res.body) as Map<String, dynamic>;
+  static Future<Map<String, dynamic>> registerForRace({
+    required int raceId,
+    required String city,
+    required String contactNumber,
+    required String emergencyContact,
+    required String email,
+    required bool isFirstMarathon,
+    required String sex,
+  }) async {
+    final headers = await _authHeaders();
+
+    final res = await http.post(
+      Uri.parse('$_base/races/$raceId/register'),
+      headers: headers,
+      body: jsonEncode({
+        'city': city,
+        'contact_number': contactNumber,
+        'emergency_contact': emergencyContact,
+        'is_first_marathon': isFirstMarathon,
+        'sex': sex,
+        'email': email,
+      }),
+    );
+
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    throw Exception(body['detail'] ?? 'Registration failed');
   }
-  final body = jsonDecode(res.body) as Map<String, dynamic>;
-  throw Exception(body['detail'] ?? 'Registration failed');
-}
+
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('jwt_token');
@@ -120,8 +124,6 @@ static Future<Map<String, dynamic>> registerForRace({
     return prefs.getString('user_role');
   }
 
-  // ── Token/Role persistence ────────────────────────────────
-
   static Future<void> saveToken(String token) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('jwt_token', token);
@@ -132,8 +134,6 @@ static Future<Map<String, dynamic>> registerForRace({
     await prefs.setString('user_role', role);
   }
 
-  // ── Auth header helper ─────────────────────────────────────
-
   static Future<Map<String, String>> _authHeaders() async {
     final token = await getToken();
     return {
@@ -141,8 +141,6 @@ static Future<Map<String, dynamic>> registerForRace({
       if (token != null) 'Authorization': 'Bearer $token',
     };
   }
-
-  // ── Generic HTTP helpers (used by CheckpointService) ──────
 
   static Future<http.Response> get(String path) async {
     final headers = await _authHeaders();
@@ -161,10 +159,9 @@ static Future<Map<String, dynamic>> registerForRace({
     );
   }
 
-  // ── Races ─────────────────────────────────────────────────
-
   static Future<List<Map<String, dynamic>>> getRaces() async {
     final headers = await _authHeaders();
+
     final res = await http.get(
       Uri.parse('$_base/races/'),
       headers: headers,
@@ -174,11 +171,13 @@ static Future<Map<String, dynamic>> registerForRace({
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
+
     throw Exception('Failed to load races (${res.statusCode})');
   }
 
   static Future<void> startRace(int raceId) async {
     final headers = await _authHeaders();
+
     final res = await http.post(
       Uri.parse('$_base/races/$raceId/start'),
       headers: headers,
@@ -192,6 +191,7 @@ static Future<Map<String, dynamic>> registerForRace({
 
   static Future<void> stopRace(int raceId) async {
     final headers = await _authHeaders();
+
     final res = await http.post(
       Uri.parse('$_base/races/$raceId/stop'),
       headers: headers,
@@ -203,11 +203,12 @@ static Future<Map<String, dynamic>> registerForRace({
     }
   }
 
-  // ── Leaderboard ───────────────────────────────────────────
-
   static Future<List<Map<String, dynamic>>> getLeaderboard(int raceId) async {
+    final headers = await _authHeaders();
+
     final res = await http.get(
       Uri.parse('$_base/leaderboard/$raceId'),
+      headers: headers,
     );
 
     if (res.statusCode == 200) {
@@ -215,15 +216,30 @@ static Future<Map<String, dynamic>> registerForRace({
       final list = body['leaderboard'] as List? ?? [];
       return list.cast<Map<String, dynamic>>();
     }
+
     throw Exception('Failed to load leaderboard (${res.statusCode})');
   }
 
-  // ── Runners ───────────────────────────────────────────────
+  static Future<Map<String, dynamic>> getRunnerStats(int raceId) async {
+    final headers = await _authHeaders();
+
+    final res = await http.get(
+      Uri.parse('$_base/runners/stats/$raceId'),
+      headers: headers,
+    );
+
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+
+    throw Exception('Failed to load stats (${res.statusCode})');
+  }
 
   static Future<List<Map<String, dynamic>>> getRaceRunners(
     int raceId,
   ) async {
     final headers = await _authHeaders();
+
     final res = await http.get(
       Uri.parse('$_base/races/$raceId/runners'),
       headers: headers,
@@ -233,13 +249,13 @@ static Future<Map<String, dynamic>> registerForRace({
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
+
     throw Exception('Failed to load runners (${res.statusCode})');
   }
 
-  // ── Checkpoints ───────────────────────────────────────────
-
   static Future<List<Map<String, dynamic>>> getCheckpoints(int raceId) async {
     final headers = await _authHeaders();
+
     final res = await http.get(
       Uri.parse('$_base/checkpoints/$raceId'),
       headers: headers,
@@ -249,6 +265,7 @@ static Future<Map<String, dynamic>> registerForRace({
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
+
     throw Exception('Failed to load checkpoints (${res.statusCode})');
   }
 
@@ -257,11 +274,10 @@ static Future<Map<String, dynamic>> registerForRace({
     int runnerId,
   ) async {
     final headers = await _authHeaders();
+
     await http.post(
       Uri.parse('$_base/checkpoints/$checkpointId/arrive?runner_id=$runnerId'),
       headers: headers,
     );
-    // Fire-and-forget — checkpoint arrival is also recorded in Firebase
-    // so we don't throw on failure here
   }
 }

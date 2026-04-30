@@ -186,7 +186,15 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
                 textColor: Colors.black,
                 onTap: () async {
                   final prefs = await SharedPreferences.getInstance();
-                  await prefs.setInt('active_race_id', race['id'] as int);
+                  final raceId = race['id'] as int;
+                  await prefs.setInt('active_race_id', raceId);
+
+                  // Pre-fetch so RunnerMapScreen opens with data ready
+                  await Future.wait([
+                    ApiService.getCheckpoints(raceId),
+                    ApiService.getRaces(),
+                  ]);
+
                   if (!context.mounted) return;
                   Navigator.pushAndRemoveUntil(
                     context,
