@@ -14,6 +14,7 @@ Strategy:
 
 from dataclasses import dataclass, field
 from utils.haversine import haversine
+from collections import defaultdict
 
 # ── Minimum distance (metres) that counts as real movement ──────────────────
 _MIN_MOVEMENT_METRES = 1.0
@@ -139,3 +140,41 @@ def _format_distance(metres: float) -> str:
     if metres < 1000:
         return f"{metres:.0f} m"
     return f"{metres / 1000:.2f} km"
+
+distance_store: dict[tuple[int, int], float] = defaultdict(float)
+ 
+# Tracks the last known position per (race_id, runner_id)
+_last_position: dict[tuple[int, int], tuple[float, float]] = {}
+ 
+JITTER_FILTER_METERS = 1  # ignore GPS pings that moved less than 1m
+ 
+ 
+def record_position(race_id: int, runner_id: int, lat: float, lng: float) -> float:
+    """
+    Updates cumulative distance for this runner in this race.
+    Applies a 1-metre jitter filter to ignore GPS noise.
+    Returns the total distance in metres.
+    """
+    key = (race_id, runner_id)
+ 
+    if key in _last_position:
+        prev_lat, prev_lng = _last_position[key]
+        delta = haversine(prev_lat, prev_lng, lat, lng)
+        if delta > JITTER_FILTER_METERS:
+            distance_store[key] += delta
+            _last_position[key] = (lat, lng)
+    else:
+        # First ping — store position but don't add distance yet
+        _last_position[key] = (lat, lng)
+ 
+    return distance_store[key]
+ 
+ 
+def get_distance(race_id: int, runner_id: int) -> float | None:
+    """
+    Returns cumulative distance in metres, or None if no data yet.
+    """
+    key = (race_id, runner_id)
+    if key not in _last_position:
+        return None
+    return distance_store[key]

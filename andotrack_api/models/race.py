@@ -58,3 +58,5 @@ class RaceRunner(Base):
     qr_token        = Column(String(100), unique=True, index=True)
     is_present      = Column(Boolean, default=False)
     checked_in_at   = Column(DateTime, nullable=True)
+    race_status     = Column(String(20), default="registered")  # registered → active → finished
+    bib_number      = Column(Integer, nullable=True)
