@@ -9,8 +9,12 @@ import datetime
 from database import get_db
 from models.race import Race, RaceRunner
 from models.user import User
+from models.checkpoint import Checkpoint, RunnerCheckpoint
 from models.anomaly import Anomaly
 from utils.dependencies import get_current_user
+from utils.distance_tracker import get_distance
+from utils.eta import calculate_eta
+from utils.pace import get_pace_min_per_km, format_pace
 from schemas.race import (
     RaceCreate,
     RaceResponse,
@@ -249,6 +253,36 @@ def register_for_race(
         qr_image_base64  = qr_image_b64,
     )
 
+@router.delete("/{race_id}/register")
+def unregister_from_race(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    runner_id = int(user["sub"])
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    # Can't withdraw once race is active or finished
+    if race.status in ("active", "finished"):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot withdraw after race has started."
+        )
+
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id == race_id,
+        RaceRunner.runner_id == runner_id
+    ).first()
+    if not registration:
+        raise HTTPException(status_code=404, detail="You are not registered for this race.")
+
+    db.delete(registration)
+    db.commit()
+
+    return {"message": "Registration withdrawn successfully.", "race_id": race_id}
 
 # ── QR check-in (organizer scans runner QR) ───────────────────────────────────
 
@@ -359,6 +393,33 @@ def get_anomalies(
         query = query.filter(Anomaly.resolved == resolved)
     return query.all()
 
+@router.patch("/{race_id}/anomalies/{anomaly_id}/resolve")
+def resolve_anomaly(
+    race_id: int,
+    anomaly_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can resolve anomalies.")
+
+    anomaly = db.query(Anomaly).filter(
+        Anomaly.id == anomaly_id,
+        Anomaly.race_id == race_id
+    ).first()
+    if not anomaly:
+        raise HTTPException(status_code=404, detail="Anomaly not found.")
+    if anomaly.resolved:
+        raise HTTPException(status_code=400, detail="Anomaly is already resolved.")
+
+    anomaly.resolved = True
+    db.commit()
+
+    return {
+        "message": "Anomaly resolved.",
+        "anomaly_id": anomaly_id,
+        "race_id": race_id,
+    }
 
 # ── Results-Finished Endpoints ─────────────────────────────────────────────────────────────────
 # Endpoint for saving finished race in database
@@ -495,3 +556,104 @@ def get_race_results(
         "total": len(results),
         "results": results,
     }
+
+#Runner Self-stats
+@router.get("/{race_id}/runner/{runner_id}/stats")
+def get_runner_stats(
+    race_id: int,
+    runner_id: int,
+    db: Session = Depends(get_db)
+):
+    # 1. Check race exists
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found")
+ 
+    # 2. Check runner is registered in this race
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id == race_id,
+        RaceRunner.runner_id == runner_id
+    ).first()
+    if not registration:
+        raise HTTPException(status_code=404, detail="Runner not registered in this race")
+ 
+    # 3. Distance — returns None if no GPS yet, we default to 0
+    raw_distance = get_distance(race_id, runner_id)
+    distance_km = round(raw_distance / 1000, 3) if raw_distance else 0.0
+ 
+    # 4. Pace — returns None if no speed data yet
+    pace_min = get_pace_min_per_km(str(runner_id))
+    pace_formatted = format_pace(pace_min)
+ 
+    # 5. ETA — only compute if we have pace and race has a set distance
+    eta_wall_clock = None
+    eta_seconds_remaining = None
+    if pace_min and race.distance_km:
+        remaining_km = max(race.distance_km - distance_km, 0)
+        if remaining_km > 0:
+            eta_seconds_remaining = int(pace_min * 60 * remaining_km)
+            eta_wall_clock = calculate_eta(pace_min * 60, distance_km, race.distance_km)
+        else:
+            eta_seconds_remaining = 0
+            eta_wall_clock = "Finished"
+ 
+    # 6. Checkpoints — how many has this runner passed vs total in race
+    total_checkpoints = db.query(Checkpoint).filter(
+        Checkpoint.race_id == race_id
+    ).count()
+ 
+    passed_checkpoints = db.query(RunnerCheckpoint).join(
+        Checkpoint, RunnerCheckpoint.checkpoint_id == Checkpoint.id
+    ).filter(
+        Checkpoint.race_id == race_id,
+        RunnerCheckpoint.runner_id == runner_id
+    ).count()
+ 
+    # 7. Percentage complete
+    percentage_complete = 0.0
+    if race.distance_km and race.distance_km > 0:
+        percentage_complete = round((distance_km / race.distance_km) * 100, 1)
+        percentage_complete = min(percentage_complete, 100.0)
+ 
+    # 8. Rank — compare this runner's distance against all others in the race
+    rank = _calculate_rank(race_id, runner_id, distance_km)
+ 
+    return {
+        "runner_id": runner_id,
+        "race_id": race_id,
+        "bib_number": registration.bib_number,
+        "race_status": registration.race_status,
+        # Distance
+        "distance_km": distance_km,
+        "race_distance_km": race.distance_km,
+        "percentage_complete": percentage_complete,
+        # Pace
+        "pace_seconds_per_km": pace_min * 60,
+        "pace_formatted": pace_formatted,
+        # ETA
+        "eta_wall_clock": eta_wall_clock,
+        "eta_seconds_remaining": eta_seconds_remaining,
+        # Checkpoints
+        "checkpoints_passed": passed_checkpoints,
+        "checkpoints_total": total_checkpoints,
+        # Rank
+        "rank": rank,
+    }
+ 
+ 
+def _calculate_rank(race_id: int, runner_id: int, my_distance_km: float) -> int | None:
+    """
+    Pulls all distances from the in-memory distance_store and counts
+    how many runners are ahead of this one. Returns 1 if leading.
+    """
+    try:
+        from utils.distance_tracker import distance_store
+ 
+        rank = 1
+        for (r_id, u_id), dist_meters in distance_store.items():
+            if r_id == race_id and u_id != runner_id:
+                if (dist_meters / 1000) > my_distance_km:
+                    rank += 1
+        return rank
+    except Exception:
+        return None

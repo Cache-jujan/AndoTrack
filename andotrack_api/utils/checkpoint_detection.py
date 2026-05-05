@@ -2,6 +2,7 @@ from utils.haversine import haversine
 from sqlalchemy.orm import Session
 from models.checkpoint import Checkpoint, RunnerCheckpoint
 from sqlalchemy.exc import IntegrityError
+import datetime
 
 def detect_checkpoint(
     db: Session,
@@ -25,7 +26,8 @@ def detect_checkpoint(
             try:
                 passage = RunnerCheckpoint(
                     runner_id=runner_id,
-                    checkpoint_id=cp.id
+                    checkpoint_id=cp.id,
+                    passed_at=datetime.datetime.utcnow()
                 )
                 db.add(passage)
                 db.commit()

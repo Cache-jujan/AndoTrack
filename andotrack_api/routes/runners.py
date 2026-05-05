@@ -1,12 +1,18 @@
+from datetime import date
+from unittest import runner
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import pickle
 import os
 
+from models.race import Race, RaceRunner
+from models.user import User
+from models.anomaly import Anomaly
 from database import get_db
 from utils.dependencies import get_current_user
-from utils.pace import record_speed, get_runner_pace_summary
+from utils.pace import record_speed, get_runner_pace_summary, get_pace_min_per_km, format_pace
 from utils.distance_tracker import (
     record_position,
     get_distance_summary,
@@ -33,13 +39,17 @@ router = APIRouter()
 
 
 # ── Request schemas ───────────────────────────────────────────────────────────
+class ProfileUpdate(BaseModel):
+    name: str = None
+    email: str = None
+    date_of_birth: date = None
 
 class LocationUpdate(BaseModel):
-    race_id:   int
-    lat:       float
-    lng:       float
-    speed:     float    # m/s from geolocator
-    accuracy:  float = 0.0
+    lat: float
+    lng: float
+    speed: float
+    race_id: int
+    accuracy: float = None  # GPS accuracy in metres from geolocator
 
 
 # ── Location + pace + distance ────────────────────────────────────────────────
@@ -53,8 +63,7 @@ def get_runners(db: Session = Depends(get_db), user=Depends(get_current_user)):
 def update_location(
     runner_id: int,
     body: LocationUpdate,
-    db: Session = Depends(get_db),
-    user=Depends(get_current_user),
+    db: Session = Depends(get_db)
 ):
     """
     Accept a GPS ping from a runner.
@@ -131,25 +140,43 @@ def update_location(
 
 
 @router.get("/{runner_id}/pace")
-def get_pace(runner_id: int, user=Depends(get_current_user)):
-    pace = get_runner_pace_summary(str(runner_id))
-    if pace["sample_count"] == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No speed data yet for runner {runner_id}.",
-        )
-    return pace
+def get_runner_pace(runner_id: int):
+    pace = get_pace_min_per_km(str(runner_id))
+    if pace is None:
+        # Neutral response instead of 404 — runner hasn't moved yet
+        return {
+            "runner_id": runner_id,
+            "pace_seconds_per_km": None,
+            "pace_formatted": None,
+            "status": "waiting_for_gps"
+        }
+    mins = int(pace // 60)
+    secs = int(pace % 60)
+    return {
+        "runner_id": runner_id,
+        "pace_seconds_per_km": pace,
+        "pace_formatted": f"{mins}:{secs:02d} /km",
+        "status": "active"
+    }
 
 
 @router.get("/{runner_id}/distance")
-def get_distance(runner_id: int, race_id: int, user=Depends(get_current_user)):
-    summary = get_distance_summary(race_id, str(runner_id))
-    if summary["gps_points_recorded"] == 0:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No GPS data yet for runner {runner_id} in race {race_id}.",
-        )
-    return summary
+def get_runner_distance(runner_id: int, race_id: int):
+    distance = get_distance(race_id, runner_id)
+    if distance is None:
+        # Neutral response instead of 404
+        return {
+            "runner_id": runner_id,
+            "race_id": race_id,
+            "distance_km": 0.0,
+            "status": "waiting_for_gps"
+        }
+    return {
+        "runner_id": runner_id,
+        "race_id": race_id,
+        "distance_km": round(distance / 1000, 3),
+        "status": "active"
+    }
 
 
 @router.get("/race/{race_id}/distances")
@@ -211,3 +238,230 @@ def get_runner_qr(
         "is_present":      registration.is_present,
         "checked_in_at":   registration.checked_in_at,
     }
+
+# ── Race history ──────────────────────────────────────────────────────────────
+ 
+@router.get("/{runner_id}/results")
+def get_runner_results(
+    runner_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user)
+):
+    """
+    Returns all completed race results for a runner — their full race history.
+    Each entry includes race name, date, final rank, distance, pace, and splits.
+    """
+    # Check runner exists
+    runner = db.query(User).filter(User.id == runner_id).first()
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found")
+ 
+    # Pull all results for this runner, most recent first
+    results = db.query(RaceResult).filter(
+        RaceResult.runner_id == runner_id
+    ).order_by(RaceResult.finished_at.desc()).all()
+ 
+    if not results:
+        return {
+            "runner_id": runner_id,
+            "runner_name": runner.name,
+            "total_races": 0,
+            "results": []
+        }
+ 
+    # Enrich each result with race info and checkpoint splits
+    history = []
+    for result in results:
+        race = db.query(Race).filter(Race.id == result.race_id).first()
+        splits = _get_splits(db, runner_id, result.race_id)
+ 
+        history.append({
+            "result_id": result.id,
+            "race_id": result.race_id,
+            "race_name": race.name if race else "Unknown Race",
+            "race_distance_km": race.distance_km if race else None,
+            "race_date": race.race_date if race else None,
+            # Performance
+            "rank": result.rank,
+            "distance_km": result.distance_km,
+            "pace_formatted": result.pace_formatted,
+            "finished_at": result.finished_at,
+            # Checkpoint splits
+            "splits": splits,
+        })
+ 
+    return {
+        "runner_id": runner_id,
+        "runner_name": runner.name,
+        "total_races": len(history),
+        "results": history
+    }
+ 
+ 
+# ── Finish race ───────────────────────────────────────────────────────────────
+ 
+@router.post("/{runner_id}/finish")
+def finish_race(
+    runner_id: int,
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user)
+):
+    """
+    Called when a runner crosses the finish line.
+    Saves their result to race_results, updates their race_status to 'finished',
+    and assigns a rank based on finish order.
+    """
+    # Check race and registration exist
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found")
+ 
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id == race_id,
+        RaceRunner.runner_id == runner_id
+    ).first()
+    if not registration:
+        raise HTTPException(status_code=404, detail="Runner not registered in this race")
+ 
+    # Don't double-save if they already finished
+    existing = db.query(RaceResult).filter(
+        RaceResult.race_id == race_id,
+        RaceResult.runner_id == runner_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Result already recorded for this runner")
+ 
+    # Get distance and pace from in-memory stores
+    from utils.distance_tracker import get_distance
+    from utils.pace import get_pace_min_per_km, format_pace
+    import datetime
+ 
+    raw_distance = get_distance(race_id, runner_id)
+    distance_km = round(raw_distance / 1000, 3) if raw_distance else 0.0
+ 
+    pace_min = get_pace_min_per_km(str(runner_id))
+    pace_formatted = format_pace(pace_min)
+ 
+    # Rank = how many results are already saved for this race + 1
+    # (first to finish gets rank 1, second gets rank 2, etc.)
+    finished_count = db.query(RaceResult).filter(
+        RaceResult.race_id == race_id
+    ).count()
+    rank = finished_count + 1
+ 
+    # Save result
+    now = datetime.datetime.utcnow()
+    result = RaceResult(
+        race_id=race_id,
+        runner_id=runner_id,
+        rank=rank,
+        distance_km=distance_km,
+        pace_formatted=pace_formatted,
+        finished_at=now
+    )
+    db.add(result)
+ 
+    # Update runner's status in the race
+    registration.race_status = "finished"
+    db.commit()
+    db.refresh(result)
+ 
+    return {
+        "message": "Finish recorded",
+        "runner_id": runner_id,
+        "race_id": race_id,
+        "rank": rank,
+        "distance_km": distance_km,
+        "pace_formatted": pace_formatted,
+        "finished_at": now,
+    }
+
+# ---ANOMALIES------------------------------
+@router.get("/{runner_id}/anomalies")
+def get_runner_anomalies(
+    runner_id: int,
+    race_id: int = None,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    query = db.query(Anomaly).filter(Anomaly.runner_id == runner_id)
+    if race_id:
+        query = query.filter(Anomaly.race_id == race_id)
+    anomalies = query.order_by(Anomaly.detected_at.desc()).all()
+    return {
+        "runner_id": runner_id,
+        "total": len(anomalies),
+        "anomalies": anomalies,
+    }
+ 
+ #----------PROFILE UPDATE---
+
+
+@router.patch("/{runner_id}/profile")
+def update_profile(
+    runner_id: int,
+    body: ProfileUpdate,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    # Runners can only edit their own profile
+    if int(user["sub"]) != runner_id:
+        raise HTTPException(status_code=403, detail="You can only edit your own profile.")
+
+    runner = db.query(User).filter(User.id == runner_id).first()
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found.")
+
+    # Check email not already taken by someone else
+    if body.email and body.email != runner.email:
+        existing = db.query(User).filter(User.email == body.email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already in use.")
+
+    if body.name:
+        runner.name = body.name
+    if body.email:
+        runner.email = body.email
+    if body.date_of_birth:
+        runner.date_of_birth = body.date_of_birth
+
+    db.commit()
+    db.refresh(runner)
+
+    return {
+        "message": "Profile updated.",
+        "runner_id": runner.id,
+        "name": runner.name,
+        "email": runner.email,
+        "date_of_birth": runner.date_of_birth,
+    }
+ 
+# ── Helper: checkpoint splits ─────────────────────────────────────────────────
+ 
+def _get_splits(db: Session, runner_id: int, race_id: int) -> list:
+    """
+    Returns checkpoint split times for a runner in a specific race,
+    ordered by checkpoint order_number.
+    """
+    from models.checkpoint import Checkpoint, RunnerCheckpoint
+ 
+    passages = db.query(RunnerCheckpoint, Checkpoint).join(
+        Checkpoint, RunnerCheckpoint.checkpoint_id == Checkpoint.id
+    ).filter(
+        Checkpoint.race_id == race_id,
+        RunnerCheckpoint.runner_id == runner_id
+    ).order_by(Checkpoint.order_number).all()
+ 
+    return [
+        {
+            "checkpoint_id": cp.id,
+            "checkpoint_name": cp.name,
+            "order_number": cp.order_number,
+            "type": cp.type,
+            "passed_at": rc.passed_at,
+        }
+        for rc, cp in passages
+    ]
+ 
+ 
