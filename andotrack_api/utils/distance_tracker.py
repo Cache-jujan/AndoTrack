@@ -64,6 +64,15 @@ def record_position(
     state.point_count += 1
     return delta if delta >= _MIN_MOVEMENT_METRES else 0.0
 
+def get_last_position(race_id: int, runner_id: str) -> tuple[float, float] | None:
+    """
+    Return the last known (lat, lng) for a runner, or None if no data yet.
+    Used by the anomaly pipeline to compute acceleration and direction_change.
+    """
+    state = _tracker.get((race_id, runner_id))
+    if state is None:
+        return None
+    return (state.last_lat, state.last_lng)
 
 def get_distance_metres(race_id: int, runner_id: str) -> float:
     """Return total distance covered in metres. 0.0 if no data."""

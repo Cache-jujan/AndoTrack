@@ -388,7 +388,7 @@ def finish_race(
         raise HTTPException(status_code=400, detail="Race must be active before it can be finished.")
     
     # Prevents duplicate when called multiple twice
-    existing = db.query(RaceResult).filter(RaceResult.race_id).first()
+    existing = db.query(RaceResult).filter(RaceResult.race_id == race_id).first()
     if existing:
         raise HTTPException(status_code=400, detail="Results are already saved for this race")
     
@@ -472,14 +472,14 @@ def get_race_results(
     results = []
     for row in rows:
         runner = db.query(User).filter(User.id == row.runner_id).first()
-        result.append({
+        results.append({
             "rank": row.rank,
             "runner_id": row.runner_id,
             "name": runner.name if runner else f"Runner #{row.runner_id}",
             "distance_metres": row.distance_metres,
             "distance_km": row.distance_km,
             "distance_formatted": (
-                f"{row.distance_meteres:.0f} m"
+                f"{row.distance_metres:.0f} m"
                 if row.distance_metres < 1000
                 else f"{row.distance_km:.2f} km"
             ),
