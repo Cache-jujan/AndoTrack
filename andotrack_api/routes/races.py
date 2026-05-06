@@ -554,14 +554,14 @@ def get_race_results(
     results = []
     for row in rows:
         runner = db.query(User).filter(User.id == row.runner_id).first()
-        result.append({
+        results.append({
             "rank": row.rank,
             "runner_id": row.runner_id,
             "name": runner.name if runner else f"Runner #{row.runner_id}",
             "distance_metres": row.distance_metres,
             "distance_km": row.distance_km,
             "distance_formatted": (
-                f"{row.distance_meteres:.0f} m"
+                f"{row.distance_metres:.0f} m"
                 if row.distance_metres < 1000
                 else f"{row.distance_km:.2f} km"
             ),

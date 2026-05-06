@@ -4,6 +4,9 @@ from unittest import runner
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+import pickle
+import os
+
 from models.race import Race, RaceRunner
 from models.user import User
 from models.anomaly import Anomaly
@@ -16,18 +19,22 @@ from utils.distance_tracker import (
     get_all_runners_distance,
     reset_runner,
     reset_race,
-    get_distance,
+    get_last_position,
 )
 from utils.qr_generator import token_to_base64_png
 from models.race import RaceRunner
-from schemas.race import (
-    RaceCreate,
-    RaceResponse,
-    RunnerRegistrationRequest,
-    RunnerRegistrationResponse,
-    CheckInRequest,
-    CheckInResponse,
-)
+from ml.anomaly_detector import run_anomaly_detection
+from ml.feature_extraction import extract_features
+from routes.anomaly_handler import save_and_push_anomaly
+
+# ── Load ML model once at startup ────────────────────────────────────────────
+_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..","ml", "anomaly_model.pkl")
+_anomaly_model = None
+if os.path.exists(_MODEL_PATH):
+    with open(_MODEL_PATH, "rb") as _f:
+        _anomaly_model = pickle.load(_f)
+else:
+    print(f"⚠️ Model not found at: {os.path.abspath(_MODEL_PATH)}")
 router = APIRouter()
 
 
@@ -58,36 +65,77 @@ def update_location(
     body: LocationUpdate,
     db: Session = Depends(get_db)
 ):
-    from utils.pace import record_speed
-    from utils.distance_tracker import record_position
-    from utils.checkpoint_detection import detect_checkpoint
- 
-    # Skip low-quality GPS pings — accuracy > 50m is unreliable
-    if body.accuracy is not None and body.accuracy > 50:
-        return {
-            "runner_id": runner_id,
-            "skipped": True,
-            "reason": f"GPS accuracy too low ({body.accuracy:.0f}m)"
-        }
- 
-    # Record pace and distance
-    record_speed(runner_id, body.speed)
-    distance_meters = record_position(body.race_id, runner_id, body.lat, body.lng)
-    distance_km = round(distance_meters / 1000, 3)
- 
-    # Check if runner entered a checkpoint radius
-    checkpoint_hit = detect_checkpoint(
-        db=db,
-        runner_id=runner_id,
-        race_id=body.race_id,
-        lat=body.lat,
-        lng=body.lng
-    )
- 
+    """
+    Accept a GPS ping from a runner.
+    Records speed (rolling pace) and position (cumulative distance).
+    Returns both in a single response.
+    """
+    runner_key = str(runner_id)
+
+    record_speed(runner_key, body.speed)
+    pace = get_runner_pace_summary(runner_key)
+
+    # Get previous position BEFORE updating
+    prev = get_last_position(body.race_id, runner_key)
+
+    delta    = record_position(body.race_id, runner_key, body.lat, body.lng)
+    distance = get_distance_summary(body.race_id, runner_key)
+
+    # ── Anomaly detection ─────────────────────────────────────────────────
+    anomaly_result = None
+    if _anomaly_model is not None and prev is not None:
+        prev_lat, prev_lng = prev
+        features = extract_features(
+            current_lat=body.lat,
+            current_lng=body.lng,
+            current_speed=body.speed,
+            prev_lat=prev_lat,
+            prev_lng=prev_lng,
+            prev_speed=body.speed,
+            route_lat=body.lat,
+            route_lng=body.lng,
+            time_delta=5.0,
+        )
+        is_anomaly, reason, score = run_anomaly_detection(_anomaly_model, features)
+        if is_anomaly:
+            try:
+                save_and_push_anomaly(
+                    db=db,
+                    runner_id=runner_id,
+                    race_id=body.race_id,
+                    reason=reason,
+                    score=score,
+                    lat=body.lat,
+                    lng=body.lng,
+                )
+                anomaly_result = {"detected": True, "reason": reason, "score": round(score, 4)}
+            except Exception as e:
+                print(f"ANOMALY ERROR: {e}")
+                import traceback
+                traceback.print_exc()
+
     return {
-        "runner_id": runner_id,
-        "distance_km": distance_km,
-        "checkpoint": checkpoint_hit,  # None or {"checkpoint_id", "name", "order"}
+        "runner_id":  runner_id,
+        "race_id":    body.race_id,
+        "lat":        body.lat,
+        "lng":        body.lng,
+        "speed_ms":   body.speed,
+        "speed_kmh":  round(body.speed * 3.6, 2),
+        "pace": {
+            "min_per_km":    pace["pace_min_per_km"],
+            "formatted":     pace["pace_formatted"],
+            "samples_used":  pace["sample_count"],
+            "avg_speed_ms":  pace["avg_speed_ms"],
+            "avg_speed_kmh": pace["avg_speed_kmh"],
+        },
+        "distance": {
+            "metres":               distance["distance_metres"],
+            "km":                   distance["distance_km"],
+            "formatted":            distance["distance_formatted"],
+            "delta_metres":         round(delta, 2),
+            "gps_points_recorded":  distance["gps_points_recorded"],
+        },
+        "anomaly": anomaly_result,
     }
 
 
@@ -163,7 +211,6 @@ def get_runner_qr(
     Used by qr_screen.dart so runner can view/save their QR at any time.
     Query param: ?race_id=1
     """
-    # Runner can only fetch their own QR; organizer can fetch any
     requesting_id = int(user["sub"])
     role          = user.get("role")
 
@@ -181,7 +228,6 @@ def get_runner_qr(
             detail=f"Runner {runner_id} is not registered for race {race_id}.",
         )
 
-    # Re-generate QR image from stored token (token itself is the source of truth)
     qr_image_b64 = token_to_base64_png(registration.qr_token)
 
     return {
