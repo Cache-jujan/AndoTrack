@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'firebase_options.dart';
-import 'screens/login_screen.dart';
-import 'screens/organizer_dashboard.dart';
-import 'screens/runner_map_screen.dart';
-import 'screens/runner_dashboard_screen.dart';
-import 'services/api_service.dart';
 import 'package:geolocator/geolocator.dart';
-import 'services/notification_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/services/notification_service.dart';
+import 'package:andotrack_app/features/auth/screens/login_screen.dart';
+import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
+import 'package:andotrack_app/roles/race_director/race_director_dashboard.dart';
+import 'package:andotrack_app/roles/runner_app/runner_dashboard_screen.dart';
+import 'firebase_options.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
