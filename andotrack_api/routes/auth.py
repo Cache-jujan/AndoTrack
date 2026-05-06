@@ -40,7 +40,18 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
     if not verify_password(body.password, user.password):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_token({"sub": str(user.id), "role": user.role})
+    # Get race_id from staff assignment if user is staff
+    race_id = None
+    if user.role in ("kit_staff", "checkin_staff"):
+        from models.staff_assignment import StaffAssignment
+        assignment = db.query(StaffAssignment).filter(
+            StaffAssignment.user_id == user.id,
+            StaffAssignment.is_active == True
+        ).first()
+        if assignment:
+            race_id = assignment.race_id
+
+    token = create_token({"sub": str(user.id), "role": user.role}, race_id=race_id)
     return TokenResponse(
         access_token=token,
         role=user.role,

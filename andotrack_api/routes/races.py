@@ -1,16 +1,20 @@
 from models.result import RaceResult
 from utils.pace import get_runner_pace_summary
 from utils.distance_tracker import get_all_runners_distance
+from utils.auth import hash_password
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import datetime
-
+import secrets
+import string
 from database import get_db
 from models.race import Race, RaceRunner
 from models.user import User
 from models.checkpoint import Checkpoint, RunnerCheckpoint
 from models.anomaly import Anomaly
+from models.staff_assignment import StaffAssignment
+from models.race_checkin_qr import RaceCheckinQR
 from utils.dependencies import get_current_user
 from utils.distance_tracker import get_distance
 from utils.eta import calculate_eta
@@ -220,21 +224,36 @@ def register_for_race(
             status_code=422,
             detail=f"sex must be one of: {', '.join(valid_sex)}"
         )
+    
+    valid_shirt_sizes = {"XS", "S", "M", "L", "XL", "XXL"}
+    if body.shirt_size not in valid_shirt_sizes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"shirt_size must be one of: {', '.join(sorted(valid_shirt_sizes))}"
+        )
+
+# Auto-assign bib_number
+    max_bib = db.query(func.max(RaceRunner.bib_number)).filter(
+        RaceRunner.race_id == race_id
+    ).scalar()
+    bib_number = (max_bib or 0) + 1
 
     # Generate QR token + image
     qr_token, qr_image_b64 = generate_registration_qr(race_id, runner_id)
 
     # Save registration
     registration = RaceRunner(
-        race_id            = race_id,
-        runner_id          = runner_id,
-        city               = body.city,
-        contact_number     = body.contact_number,
-        is_first_marathon  = body.is_first_marathon,
-        emergency_contact  = body.emergency_contact,
-        sex                = body.sex,
-        qr_token           = qr_token,
-        is_present         = False,
+        race_id           = race_id,
+        runner_id         = runner_id,
+        city              = body.city,
+        contact_number    = body.contact_number,
+        is_first_marathon = body.is_first_marathon,
+        emergency_contact = body.emergency_contact,
+        sex               = body.sex,
+        qr_token          = qr_token,
+        shirt_size        = body.shirt_size,
+        bib_number        = bib_number,
+        is_present        = False,
     )
     db.add(registration)
     db.commit()
@@ -244,13 +263,15 @@ def register_for_race(
     runner = db.query(User).filter(User.id == runner_id).first()
 
     return RunnerRegistrationResponse(
-        message          = "Registered successfully! Please save your QR code.",
-        race_id          = race_id,
-        runner_id        = runner_id,
-        runner_name      = runner.name if runner else "Runner",
-        race_name        = race.name,
-        qr_token         = qr_token,
-        qr_image_base64  = qr_image_b64,
+        message         = "Registered successfully! Please save your QR code.",
+        race_id         = race_id,
+        runner_id       = runner_id,
+        runner_name     = runner.name if runner else "Runner",
+        race_name       = race.name,
+        qr_token        = qr_token,
+        qr_image_base64 = qr_image_b64,
+        bib_number      = registration.bib_number,
+        shirt_size      = registration.shirt_size,
     )
 
 @router.delete("/{race_id}/register")
@@ -657,3 +678,285 @@ def _calculate_rank(race_id: int, runner_id: int, my_distance_km: float) -> int 
         return rank
     except Exception:
         return None
+    
+
+# ── Staff Management ──────────────────────────────────────────────────────────
+
+@router.post("/{race_id}/staff")
+def create_staff(
+    race_id: int,
+    name: str,
+    email: str,
+    role: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can create staff.")
+
+    if role not in ("kit_staff", "checkin_staff"):
+        raise HTTPException(status_code=422, detail="role must be kit_staff or checkin_staff")
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    existing = db.query(User).filter(User.email == email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    # Generate temp password
+    temp_pw = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+
+    staff = User(
+        name     = name,
+        email    = email,
+        password = hash_password(temp_pw),
+        role     = role,
+    )
+    db.add(staff)
+    db.commit()
+    db.refresh(staff)
+
+    assignment = StaffAssignment(user_id=staff.id, race_id=race_id)
+    db.add(assignment)
+    db.commit()
+
+    return {
+        "staff_id":     staff.id,
+        "name":         staff.name,
+        "email":        staff.email,
+        "role":         staff.role,
+        "temp_password": temp_pw,
+        "race_id":      race_id,
+    }
+
+
+@router.get("/{race_id}/staff")
+def get_staff(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can view staff.")
+
+    assignments = db.query(StaffAssignment).filter(
+        StaffAssignment.race_id == race_id
+    ).all()
+
+    result = []
+    for a in assignments:
+        staff = db.query(User).filter(User.id == a.user_id).first()
+        if staff:
+            result.append({
+                "staff_id":    staff.id,
+                "name":        staff.name,
+                "email":       staff.email,
+                "role":        staff.role,
+                "is_active":   a.is_active,
+                "assigned_at": a.assigned_at,
+            })
+    return result
+
+
+@router.patch("/{race_id}/staff/{staff_id}/deactivate")
+def deactivate_staff(
+    race_id: int,
+    staff_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can deactivate staff.")
+
+    assignment = db.query(StaffAssignment).filter(
+        StaffAssignment.race_id == race_id,
+        StaffAssignment.user_id == staff_id,
+    ).first()
+
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Staff assignment not found.")
+
+    assignment.is_active = False
+    db.commit()
+
+    return {
+        "message":  "Staff deactivated.",
+        "staff_id": staff_id,
+        "is_active": False,
+    }
+
+
+# ── Check-in QR (static, organizer/staff displays it) ────────────────────────
+
+@router.get("/{race_id}/checkin-qr")
+def get_checkin_qr(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    role = user.get("role")
+    if role not in ("organizer", "kit_staff", "checkin_staff"):
+        raise HTTPException(status_code=403, detail="Not authorized to view check-in QR.")
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    # Return existing QR if already generated
+    existing = db.query(RaceCheckinQR).filter(
+        RaceCheckinQR.race_id == race_id
+    ).first()
+
+    if existing:
+        qr_image_b64 = token_to_base64_png(existing.qr_payload)
+        return {
+            "race_id":        race_id,
+            "qr_image_base64": qr_image_b64,
+            "checkin_opens_at": race.scheduled_start,
+        }
+
+    # Generate and save new QR
+    payload = f"andotrack://checkin/{race_id}"
+    new_qr = RaceCheckinQR(race_id=race_id, qr_payload=payload)
+    db.add(new_qr)
+    db.commit()
+
+    qr_image_b64 = token_to_base64_png(payload)
+
+    return {
+        "race_id":         race_id,
+        "qr_image_base64": qr_image_b64,
+        "checkin_opens_at": race.scheduled_start,
+    }
+
+
+# ── Runner Self Check-in (runner scans staff QR) ──────────────────────────────
+
+@router.post("/{race_id}/checkin/self")
+def self_checkin(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    runner_id = int(user["sub"])
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    # Check window if scheduled_start is set
+    if race.scheduled_start:
+        now = datetime.datetime.utcnow()
+        window_open  = race.scheduled_start - datetime.timedelta(hours=2)
+        window_close = race.scheduled_start + datetime.timedelta(hours=1)
+        if not (window_open <= now <= window_close):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Check-in is not open for this race."
+            )
+
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id   == race_id,
+        RaceRunner.runner_id == runner_id,
+    ).first()
+
+    if not registration:
+        raise HTTPException(status_code=404, detail="You are not registered for this race.")
+
+    if registration.is_present:
+        raise HTTPException(status_code=400, detail="You are already checked in.")
+
+    now = datetime.datetime.utcnow()
+    registration.is_present    = True
+    registration.checked_in_at = now
+    registration.race_status   = "present"
+    db.commit()
+
+    runner = db.query(User).filter(User.id == runner_id).first()
+
+    return CheckInResponse(
+        message       = f"✓ {runner.name if runner else 'Runner'} checked in successfully!",
+        runner_id     = runner_id,
+        runner_name   = runner.name if runner else "Unknown",
+        race_id       = race_id,
+        checked_in_at = now,
+    )
+
+
+# ── Runner Status Manual Update ───────────────────────────────────────────────
+
+@router.patch("/{race_id}/runners/{runner_id}/status")
+def update_runner_status(
+    race_id: int,
+    runner_id: int,
+    status: str,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can update runner status.")
+
+    allowed_statuses = {"dnf", "dns", "racing"}
+    if status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot manually set status to '{status}'. Allowed: dnf, dns, racing."
+        )
+
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id   == race_id,
+        RaceRunner.runner_id == runner_id,
+    ).first()
+
+    if not registration:
+        raise HTTPException(status_code=404, detail="Runner not found in this race.")
+
+    registration.race_status = status
+    db.commit()
+
+    return {
+        "runner_id":   runner_id,
+        "race_id":     race_id,
+        "race_status": registration.race_status,
+    }
+
+# ── Payment Simulation ────────────────────────────────────────────────────────
+
+@router.post("/{race_id}/pay")
+def simulate_payment(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """
+    Simulates payment confirmation for a registered runner.
+    No real payment data — just confirms registration and returns bib + shirt info.
+    """
+    runner_id = int(user["sub"])
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    registration = db.query(RaceRunner).filter(
+        RaceRunner.race_id   == race_id,
+        RaceRunner.runner_id == runner_id,
+    ).first()
+
+    if not registration:
+        raise HTTPException(status_code=404, detail="You are not registered for this race.")
+
+    # Ensure race_status is set to registered (payment confirmed)
+    registration.race_status = "registered"
+    db.commit()
+
+    return {
+        "message":    "Payment confirmed. You are registered!",
+        "race_id":    race_id,
+        "runner_id":  runner_id,
+        "bib_number": registration.bib_number,
+        "shirt_size": registration.shirt_size,
+        "race_status": registration.race_status,
+    }
