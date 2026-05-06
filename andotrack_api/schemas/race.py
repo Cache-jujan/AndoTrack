@@ -54,6 +54,7 @@ class RunnerRegistrationRequest(BaseModel):
     is_first_marathon   : bool  = Field(False)
     emergency_contact   : str   = Field(..., example="Juan Dela Cruz – 09179999999")
     sex                 : str   = Field(..., example="male")   # male | female | prefer_not_to_say
+    shirt_size : str = Field(..., example="M")  # XS | S | M | L | XL | XXL
 
 
 class RunnerRegistrationResponse(BaseModel):
@@ -65,6 +66,8 @@ class RunnerRegistrationResponse(BaseModel):
     race_name           : str
     qr_token            : str
     qr_image_base64     : str   # base64-encoded PNG — Flutter renders this directly
+    bib_number          : int
+    shirt_size          : str
 
 
 # ── Check-in schemas ──────────────────────────────────────────────────────────

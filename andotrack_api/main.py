@@ -3,13 +3,15 @@ load_dotenv()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine, Base
-from routes import auth, races, runners, checkpoints, leaderboard
+from routes import auth, races, runners, checkpoints, leaderboard, kit
 from models.result import RaceResult
 import firebase 
 import models.user
 import models.race
 import models.checkpoint
 import models.anomaly
+import models.staff_assignment
+import models.race_checkin_qr
 import pickle
 
 # Load ML model once on startup
@@ -40,6 +42,7 @@ app.include_router(races.router, prefix="/races", tags=["Races"])
 app.include_router(runners.router, prefix="/runners", tags=["Runners"])
 app.include_router(checkpoints.router, prefix="/checkpoints", tags=["Checkpoints"])
 app.include_router(leaderboard.router, prefix="/leaderboard", tags=["Leaderboard"])
+app.include_router(kit.router, prefix="/kit", tags=["Kit"])
 
 @app.get("/")
 def root():

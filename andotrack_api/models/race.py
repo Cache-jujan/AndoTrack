@@ -60,3 +60,9 @@ class RaceRunner(Base):
     checked_in_at   = Column(DateTime, nullable=True)
     race_status     = Column(String(20), default="registered")  # registered → active → finished
     bib_number      = Column(Integer, nullable=True)
+    shirt_size      = Column(String(5), nullable=True)
+    claimed         = Column(Boolean, default=False)
+    claimed_at      = Column(DateTime, nullable=True)
+    is_walkin       = Column(Boolean, default=False)
+    walkin_name     = Column(String(100), nullable=True)
+    walkin_contact  = Column(String(30), nullable=True)

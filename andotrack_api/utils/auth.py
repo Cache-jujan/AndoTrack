@@ -11,8 +11,10 @@ def hash_password(password: str) -> str:
 def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
-def create_token(data: dict) -> str:
+def create_token(data: dict, race_id: int = None) -> str:
     payload = data.copy()
+    if race_id is not None:
+        payload["race_id"] = race_id
     expire = datetime.utcnow() + timedelta(
         minutes=int(os.getenv("JWT_EXPIRE_MINUTES", 60))
     )
