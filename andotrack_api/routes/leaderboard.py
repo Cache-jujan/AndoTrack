@@ -13,7 +13,7 @@ from models.user import User
 router = APIRouter()
 
 
-@router.get("/{race_id}/leaderboard")
+@router.get("/{race_id}")
 def get_leaderboard(
     race_id: int,
     db: Session = Depends(get_db),
