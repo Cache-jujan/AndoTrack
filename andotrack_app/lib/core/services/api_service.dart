@@ -1,21 +1,10 @@
-// ============================================================
-// ApiService — Central HTTP client for AndoTrack
-// ─────────────────────────────────────────────────────────────
-// • Auth: login, register, logout, token/role persistence
-// • Races: list, create (full schema), start, stop
-// • Leaderboard: fetch by raceId
-// • Runners: list by raceId, profile
-// • Checkpoints: list, arrive, delete
-// • Generic helpers: get, post, delete (used by CheckpointService)
-// ============================================================
-
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config/app_config.dart';
 
 class ApiService {
-  static const String _base = 'https://andotrack-production.up.railway.app';
-
+      static const String _base = 'https://andotrack-production.up.railway.app';  
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> login(
@@ -74,7 +63,6 @@ class ApiService {
           'name': body['name'],
         };
       }
-
       return {
         'success': false,
         'message': body['detail'] ?? 'Registration failed',
@@ -163,7 +151,7 @@ class ApiService {
     };
   }
 
-  // ── Generic HTTP helpers (used by CheckpointService etc.) ─────────────────
+  // ── Generic HTTP helpers ──────────────────────────────────────────────────
 
   static Future<http.Response> get(String path) async {
     final headers = await _authHeaders();
@@ -182,7 +170,31 @@ class ApiService {
     );
   }
 
-  /// DELETE helper — used by CheckpointService.deleteCheckpoint
+  static Future<http.Response> patch(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final headers = await _authHeaders();
+    return http.patch(
+      Uri.parse('$_base$path'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+  }
+
+  /// PUT helper — full replacement, used by CheckpointService.replaceCheckpoint
+  static Future<http.Response> put(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    final headers = await _authHeaders();
+    return http.put(
+      Uri.parse('$_base$path'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+  }
+
   static Future<http.Response> delete(String path) async {
     final headers = await _authHeaders();
     return http.delete(Uri.parse('$_base$path'), headers: headers);
@@ -192,7 +204,6 @@ class ApiService {
 
   static Future<List<Map<String, dynamic>>> getRaces() async {
     final headers = await _authHeaders();
-
     final res = await http.get(
       Uri.parse('$_base/races/'),
       headers: headers,
@@ -201,8 +212,20 @@ class ApiService {
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
-
     throw Exception('Failed to load races (${res.statusCode})');
+  }
+
+  static Future<Map<String, dynamic>> getRace(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/races/$raceId'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    throw Exception(body['detail'] ?? 'Failed to load race');
   }
 
   static Future<void> createRace(Map<String, dynamic> payload) async {
@@ -220,7 +243,6 @@ class ApiService {
 
   static Future<void> startRace(int raceId) async {
     final headers = await _authHeaders();
-
     final res = await http.post(
       Uri.parse('$_base/races/$raceId/start'),
       headers: headers,
@@ -233,7 +255,6 @@ class ApiService {
 
   static Future<void> stopRace(int raceId) async {
     final headers = await _authHeaders();
-
     final res = await http.post(
       Uri.parse('$_base/races/$raceId/stop'),
       headers: headers,
@@ -246,8 +267,7 @@ class ApiService {
 
   // ── Leaderboard ───────────────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getLeaderboard(
-      int raceId) async {
+  static Future<List<Map<String, dynamic>>> getLeaderboard(int raceId) async {
     final headers = await _authHeaders();
     final res = await http.get(
       Uri.parse('$_base/leaderboard/$raceId'),
@@ -258,30 +278,25 @@ class ApiService {
       final list = body['leaderboard'] as List? ?? [];
       return list.cast<Map<String, dynamic>>();
     }
-
     throw Exception('Failed to load leaderboard (${res.statusCode})');
   }
 
   static Future<Map<String, dynamic>> getRunnerStats(int raceId) async {
     final headers = await _authHeaders();
-
     final res = await http.get(
       Uri.parse('$_base/runners/stats/$raceId'),
       headers: headers,
     );
-
     if (res.statusCode == 200) {
       return jsonDecode(res.body) as Map<String, dynamic>;
     }
-
     throw Exception('Failed to load stats (${res.statusCode})');
   }
+
   // ── Runners ───────────────────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getRaceRunners(
-      int raceId) async {
+  static Future<List<Map<String, dynamic>>> getRaceRunners(int raceId) async {
     final headers = await _authHeaders();
-
     final res = await http.get(
       Uri.parse('$_base/races/$raceId/runners'),
       headers: headers,
@@ -290,11 +305,9 @@ class ApiService {
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
-
     throw Exception('Failed to load runners (${res.statusCode})');
   }
 
-  
   // ── Profile ───────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> getProfile() async {
@@ -309,7 +322,6 @@ class ApiService {
       }
     } catch (_) {}
 
-    // Graceful offline fallback — return what we cached locally
     final prefs = await SharedPreferences.getInstance();
     return {
       'email': null,
@@ -321,10 +333,8 @@ class ApiService {
 
   // ── Checkpoints ───────────────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getCheckpoints(
-      int raceId) async {
+  static Future<List<Map<String, dynamic>>> getCheckpoints(int raceId) async {
     final headers = await _authHeaders();
-
     final res = await http.get(
       Uri.parse('$_base/checkpoints/$raceId'),
       headers: headers,
@@ -333,7 +343,6 @@ class ApiService {
       final list = jsonDecode(res.body) as List;
       return list.cast<Map<String, dynamic>>();
     }
-
     throw Exception('Failed to load checkpoints (${res.statusCode})');
   }
 
@@ -342,15 +351,12 @@ class ApiService {
     int runnerId,
   ) async {
     final headers = await _authHeaders();
-
     await http.post(
-      Uri.parse(
-          '$_base/checkpoints/$checkpointId/arrive?runner_id=$runnerId'),
+      Uri.parse('$_base/checkpoints/$checkpointId/arrive?runner_id=$runnerId'),
       headers: headers,
     );
   }
 
-  /// Delete a single checkpoint by ID.
   static Future<void> deleteCheckpoint(int checkpointId) async {
     final headers = await _authHeaders();
     final res = await http.delete(
@@ -365,8 +371,6 @@ class ApiService {
 
   // ── QR Check-In ───────────────────────────────────────────────────────────
 
-  /// Organizer scans a runner's QR → POST /races/{race_id}/checkin
-  /// Throws [ApiException] with the server's error message on failure.
   static Future<Map<String, dynamic>> checkInRunner({
     required int raceId,
     required String qrToken,
@@ -385,7 +389,6 @@ class ApiService {
     throw ApiException(detail);
   }
 
-  /// Runner polls validation status → GET /runners/{runner_id}/qr?race_id=X
   static Future<Map<String, dynamic>> getRunnerQr({
     required int runnerId,
     required int raceId,

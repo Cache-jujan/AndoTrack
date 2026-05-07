@@ -76,7 +76,11 @@ class _RunnerMapScreenState extends State<RunnerMapScreen> {
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     _runnerId = prefs.getInt('user_id');
-    _raceId = prefs.getInt('active_race_id') ?? 1;
+    _raceId = prefs.getInt('active_race_id'); // null = no race joined yet
+
+    // Guard: if there's no active race, don't attempt to load anything.
+    // The screen will show an empty state instead of guessing a race id.
+    if (_raceId == null) return;
 
     await _loadRaceStatus();
 
@@ -686,7 +690,7 @@ void _checkCheckpointProximity(Position pos) {
                     child: Text(
                       _raceName.isNotEmpty
                           ? _raceName
-                          : 'Race #$_raceId',
+                          : 'No race selected',
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,
