@@ -9,4 +9,4 @@ class RaceCheckinQR(Base):
     id          = Column(Integer, primary_key=True, index=True)
     race_id     = Column(Integer, ForeignKey("races.id"), nullable=False, unique=True)
     qr_payload  = Column(String(255), nullable=False)
-    created_at  = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    created_at  = Column(DateTime, default=datetime.datetime.utcnow)

@@ -9,5 +9,5 @@ class StaffAssignment(Base):
     id          = Column(Integer, primary_key=True, index=True)
     user_id     = Column(Integer, ForeignKey("users.id"), nullable=False)
     race_id     = Column(Integer, ForeignKey("races.id"), nullable=False)
-    assigned_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    assigned_at = Column(DateTime, default=datetime.datetime.utcnow)
     is_active   = Column(Boolean, default=True)
