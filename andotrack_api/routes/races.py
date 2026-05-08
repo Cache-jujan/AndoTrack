@@ -738,7 +738,7 @@ def get_staff(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if user.get("role") not in ("organizer", "race_director"):
+    if user.get("role") not in ("organizer", "race_director", "checkin_staff", "kit_staff"):
         raise HTTPException(status_code=403, detail="Only organizers can view staff.")
 
     assignments = db.query(StaffAssignment).filter(

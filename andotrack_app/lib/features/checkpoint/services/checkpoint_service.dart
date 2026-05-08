@@ -1,5 +1,3 @@
-// lib/features/checkpoint/services/checkpoint_service.dart
-
 import 'dart:convert';
 import 'package:andotrack_app/core/services/api_service.dart';
 

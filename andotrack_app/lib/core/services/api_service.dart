@@ -1,7 +1,7 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../config/app_config.dart';
 
 class ApiService {
       static const String _base = 'https://andotrack-production.up.railway.app';  
@@ -268,17 +268,27 @@ class ApiService {
   // ── Leaderboard ───────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getLeaderboard(int raceId) async {
-    final headers = await _authHeaders();
-    final res = await http.get(
-      Uri.parse('$_base/leaderboard/$raceId'),
-      headers: headers,
-    );
-    if (res.statusCode == 200) {
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      final list = body['leaderboard'] as List? ?? [];
-      return list.cast<Map<String, dynamic>>();
+    try {
+      final headers = await _authHeaders();
+      final res = await http.get(
+        Uri.parse('$_base/leaderboard/$raceId'),
+        headers: headers,
+      );
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        // Backend may return {"leaderboard": [...]} or directly [...]
+        if (decoded is List) {
+          return decoded.cast<Map<String, dynamic>>();
+        }
+        if (decoded is Map<String, dynamic>) {
+          final list = decoded['leaderboard'] as List? ?? [];
+          return list.cast<Map<String, dynamic>>();
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
     }
-    throw Exception('Failed to load leaderboard (${res.statusCode})');
   }
 
   static Future<Map<String, dynamic>> getRunnerStats(int raceId) async {
@@ -297,15 +307,39 @@ class ApiService {
 
   static Future<List<Map<String, dynamic>>> getRaceRunners(int raceId) async {
     final headers = await _authHeaders();
-    final res = await http.get(
-      Uri.parse('$_base/races/$raceId/runners'),
-      headers: headers,
-    );
+    final url = '$_base/races/$raceId/runners';
+    debugPrint('[API] GET $url');
+    final res = await http.get(Uri.parse(url), headers: headers);
+    debugPrint('[API] GET $url → ${res.statusCode}');
+    debugPrint('[API] Body (first 500): ${res.body.substring(0, res.body.length.clamp(0, 500))}');
     if (res.statusCode == 200) {
-      final list = jsonDecode(res.body) as List;
-      return list.cast<Map<String, dynamic>>();
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is List) {
+          debugPrint('[API] Parsed as List — ${decoded.length} runners');
+          return decoded.cast<Map<String, dynamic>>();
+        }
+        if (decoded is Map<String, dynamic>) {
+          final list = decoded['runners'] as List? ??
+              decoded['registrations'] as List? ??
+              decoded['data'] as List? ?? [];
+          debugPrint('[API] Parsed as Map — key runners/registrations/data — ${list.length} items');
+          return list.cast<Map<String, dynamic>>();
+        }
+        debugPrint('[API] WARNING: Unexpected response shape: ${decoded.runtimeType}');
+        return [];
+      } catch (e) {
+        debugPrint('[API] PARSE ERROR on getRaceRunners: $e');
+        debugPrint('[API] Raw body: ${res.body}');
+        return [];
+      }
     }
-    throw Exception('Failed to load runners (${res.statusCode})');
+    if (res.statusCode == 404) {
+      debugPrint('[API] 404 on $url — treating as empty list');
+      return [];
+    }
+    debugPrint('[API] ERROR ${res.statusCode} on $url — body: ${res.body}');
+    throw Exception('Failed to load runners (${res.statusCode}): ${res.body}');
   }
 
   // ── Profile ───────────────────────────────────────────────────────────────
@@ -402,6 +436,128 @@ class ApiService {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
     throw ApiException('Could not fetch QR status.');
+  }
+
+  // ── Staff Accounts ────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getStaffAccounts(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/races/$raceId/staff'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      final decoded = jsonDecode(res.body);
+      if (decoded is List) return decoded.cast<Map<String, dynamic>>();
+      return [];
+    }
+    if (res.statusCode == 404) return [];
+    throw Exception('Failed to load staff (${res.statusCode})');
+  }
+
+  /// Creates a staff account for [raceId].
+  /// Backend generates the temp password and returns it as `temp_password`.
+  /// Params are sent as query params — the backend route uses FastAPI defaults.
+  static Future<Map<String, dynamic>> createStaffAccount(
+    int raceId, {
+    required String name,
+    required String email,
+    required String role,
+  }) async {
+    final headers = await _authHeaders();
+    final uri = Uri.parse('$_base/races/$raceId/staff').replace(
+      queryParameters: {'name': name, 'email': email, 'role': role},
+    );
+    final res = await http.post(uri, headers: headers);
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    try {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      throw Exception(body['detail'] ?? 'Failed to create staff account');
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception('Failed to create staff account (${res.statusCode})');
+    }
+  }
+
+  static Future<void> deactivateStaffAccount(int raceId, int staffId) async {
+    final headers = await _authHeaders();
+    final res = await http.patch(
+      Uri.parse('$_base/races/$raceId/staff/$staffId/deactivate'),
+      headers: headers,
+    );
+    if (res.statusCode != 200 && res.statusCode != 204) {
+      try {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        throw Exception(body['detail'] ?? 'Failed to deactivate staff account');
+      } catch (e) {
+        if (e is Exception) rethrow;
+        throw Exception('Failed to deactivate staff account (${res.statusCode})');
+      }
+    }
+  }
+
+  // ── Anomalies ─────────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getAnomalies(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/anomalies/$raceId'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      final list = jsonDecode(res.body) as List;
+      return list.cast<Map<String, dynamic>>();
+    }
+    if (res.statusCode == 404) return [];
+    throw Exception('Failed to load anomalies (${res.statusCode})');
+  }
+
+  static Future<void> resolveAnomaly(int anomalyId) async {
+    final headers = await _authHeaders();
+    final res = await http.patch(
+      Uri.parse('$_base/anomalies/$anomalyId/resolve'),
+      headers: headers,
+    );
+    if (res.statusCode != 200) {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      throw Exception(body['detail'] ?? 'Failed to resolve anomaly');
+    }
+  }
+
+  static Future<Map<String, dynamic>> getAnomalyReport(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/anomalies/$raceId/report'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    // Return a zeroed-out report when the endpoint isn't live yet
+    return {
+      'total': 0, 'vehicle_speed': 0, 'gps_jump': 0,
+      'off_route': 0, 'erratic': 0,
+      'resolved': 0, 'unresolved': 0,
+      'flagged_runners': <dynamic>[],
+    };
+  }
+
+  // ── Race settings update ──────────────────────────────────────────────────
+
+  static Future<void> updateRaceSettings(
+      int raceId, Map<String, dynamic> settings) async {
+    final headers = await _authHeaders();
+    final res = await http.patch(
+      Uri.parse('$_base/races/$raceId'),
+      headers: headers,
+      body: jsonEncode(settings),
+    );
+    if (res.statusCode != 200) {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      throw Exception(body['detail'] ?? 'Failed to update race settings');
+    }
   }
 }
 

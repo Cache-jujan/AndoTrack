@@ -6,8 +6,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/core/services/notification_service.dart';
 import 'package:andotrack_app/features/auth/screens/login_screen.dart';
-import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
-import 'package:andotrack_app/roles/race_director/race_director_dashboard.dart';
+import 'package:andotrack_app/roles/race_director/shell/race_director_shell.dart';
+import 'package:andotrack_app/roles/checkin_staff/shell/checkin_staff_shell.dart';
+import 'package:andotrack_app/roles/kit_staff/shell/kit_staff_shell.dart';
 import 'package:andotrack_app/roles/runner_app/runner_dashboard_screen.dart';
 import 'firebase_options.dart';
 
@@ -74,12 +75,20 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     if (token == null || role == null) return;
     if (!mounted) return;
 
-    if (role == 'organizer') {
+    if (role == 'organizer' || role == 'race_director') {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => const OrganizerDashboard(),
-        ),
+        MaterialPageRoute(builder: (_) => const RaceDirectorShell()),
+      );
+    } else if (role == 'checkin_staff') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const CheckinStaffShell()),
+      );
+    } else if (role == 'kit_staff') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const KitStaffShell()),
       );
     } else {
       Navigator.pushReplacement(
