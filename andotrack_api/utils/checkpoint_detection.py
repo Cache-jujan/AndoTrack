@@ -27,7 +27,7 @@ def detect_checkpoint(
                 passage = RunnerCheckpoint(
                     runner_id=runner_id,
                     checkpoint_id=cp.id,
-                    passed_at=datetime.datetime.utcnow()
+                    passed_at=datetime.datetime.now(datetime.timezone.utc)
                 )
                 db.add(passage)
                 db.commit()

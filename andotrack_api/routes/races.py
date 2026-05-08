@@ -341,7 +341,7 @@ def checkin_runner(
         )
 
     # Mark present
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     registration.is_present    = True
     registration.checked_in_at = now
     db.commit()
@@ -477,7 +477,7 @@ def finish_race(
 
     standings = get_all_runners_distance(race_id)
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     saved = []
 
     for rank, entry in enumerate(standings, start=1):
@@ -848,7 +848,7 @@ def self_checkin(
 
     # Check window if scheduled_start is set
     if race.scheduled_start:
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         window_open  = race.scheduled_start - datetime.timedelta(hours=2)
         window_close = race.scheduled_start + datetime.timedelta(hours=1)
         if not (window_open <= now <= window_close):
@@ -868,7 +868,7 @@ def self_checkin(
     if registration.is_present:
         raise HTTPException(status_code=400, detail="You are already checked in.")
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     registration.is_present    = True
     registration.checked_in_at = now
     registration.race_status   = "present"

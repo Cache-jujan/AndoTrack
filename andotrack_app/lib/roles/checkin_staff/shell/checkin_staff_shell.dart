@@ -405,8 +405,8 @@ class _RaceCardState extends State<_RaceCard> {
     final race       = widget.race;
     final name       = race['name']?.toString() ?? 'Unnamed Race';
     final status     = race['status']?.toString();
-    final dateIso    = race['date'] ?? race['started_at'] ?? race['created_at'];
-    final checkinIso = race['check_in_opens_at'];
+    final dateIso    = race['scheduled_start'] ?? race['date'] ?? race['started_at'] ?? race['created_at'];
+    final checkinIso = race['check_in_opens_at'] ?? race['scheduled_start'];
 
     final (statusColor, statusLabel) = _statusMeta(status);
 
