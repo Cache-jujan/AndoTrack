@@ -1,3 +1,24 @@
+// DEPRECATED — NOT IN USE
+// ═══════════════════════════════════════════════════════════════════════════
+// OrganizerQrScannerScreen was the original check-in tool: a single-role,
+// mobile-camera QR scanner wired directly to the organizer account.
+//
+// It has been superseded by two purpose-built replacements:
+//
+//   1. roles/checkin_staff/screens/checkin_dashboard_screen.dart
+//      — Dedicated WEB dashboard for Check-in Staff. Supports search,
+//        batch operations, walk-in registration, and live runner status.
+//        Staff accounts are provisioned by the Race Director per-race.
+//
+//   2. roles/race_director/screens/live_race_dashboard_screen.dart
+//      — Race Director's live map view. Shows real-time GPS positions,
+//        anomaly detection, and runner status during an active race.
+//        The Race Director no longer needs a hand-held QR scanner.
+//
+// No shells, routes, or screens import this file. It is kept here only as
+// an archaeological record of the v1 check-in architecture.
+// ═══════════════════════════════════════════════════════════════════════════
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
