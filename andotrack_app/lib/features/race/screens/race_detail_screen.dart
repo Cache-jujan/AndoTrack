@@ -1,5 +1,3 @@
-// MOVED TO: lib/features/race/screens/race_detail_screen.dart
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,6 +5,7 @@ import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
 import 'package:andotrack_app/features/runner/screens/qr_screen.dart';
 import 'package:andotrack_app/features/runner/screens/race_registration_screen.dart';
+import 'package:andotrack_app/features/runner/screens/runner_qr_scanner_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class RaceDetailScreen extends StatefulWidget {
@@ -17,7 +16,8 @@ class RaceDetailScreen extends StatefulWidget {
   State<RaceDetailScreen> createState() => _RaceDetailScreenState();
 }
 
-class _RaceDetailScreenState extends State<RaceDetailScreen> {
+class _RaceDetailScreenState extends State<RaceDetailScreen>
+    with WidgetsBindingObserver {
   bool _isRegistered = false;
   bool _checkingRegistration = true;
   Map<String, dynamic>? _registrationData;
@@ -25,17 +25,30 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
   // Live countdown
   Duration? _remaining;
   Timer? _timer;
+  Timer? _pollTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkIfRegistered();
     _startCountdown();
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _checkIfRegistered(),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkIfRegistered();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    _pollTimer?.cancel();
     super.dispose();
   }
 
@@ -59,30 +72,32 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
   Future<void> _checkIfRegistered() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final userId   = prefs.getInt('user_id');
+      final userId = prefs.getInt('user_id');
       final userName = prefs.getString('user_name') ?? '';
-      final raceId   = widget.race['id'] as int;
-      final runners  = await ApiService.getRaceRunners(raceId);
-      final match    = runners
-          .cast<Map<String, dynamic>>()
-          .where((r) => r['user_id'] == userId);
+      final raceId = widget.race['id'] as int;
 
-      if (match.isNotEmpty && mounted) {
-        final runner = match.first;
+      // Use the QR endpoint — it now returns bib, shirt, claimed, race_status too
+      if (userId == null) {
+        if (mounted) setState(() => _checkingRegistration = false);
+        return;
+      }
 
-        // The runners list endpoint usually doesn't return qr_image_base64.
-        // Fall back to the locally cached value saved by QrScreen on registration.
-        final cachedBase64 = prefs.getString('qr_base64_$raceId') ?? '';
-        final cachedToken  = prefs.getString('qr_token_$raceId')  ?? '';
+      final qrData = await ApiService.getRunnerQr(
+        runnerId: userId,
+        raceId: raceId,
+      );
 
-        final qrBase64 = (runner['qr_image_base64']?.toString().isNotEmpty == true)
-            ? runner['qr_image_base64'].toString()
-            : cachedBase64;
+      debugPrint('[RaceDetail] userId=$userId raceId=$raceId claimed=${qrData['claimed']} bib=${qrData['bib_number']}');
 
-        final qrToken = (runner['qr_token']?.toString().isNotEmpty == true)
-            ? runner['qr_token'].toString()
-            : cachedToken;
+      // Cache QR for offline display
+      final b64 = qrData['qr_image_base64']?.toString() ?? '';
+      final token = qrData['qr_token']?.toString() ?? '';
+      if (b64.isNotEmpty) {
+        await prefs.setString('qr_base64_$raceId', b64);
+        await prefs.setString('qr_token_$raceId', token);
+      }
 
+      if (mounted) {
         setState(() {
           _isRegistered = true;
           _checkingRegistration = false;
@@ -90,13 +105,21 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
             'race_id': raceId,
             'race_name': widget.race['name'],
             'runner_name': userName,
-            'qr_token': qrToken,
-            'qr_image_base64': qrBase64,
+            'qr_token': token,
+            'qr_image_base64': b64,
+            'bib_number': qrData['bib_number'],
+            'shirt_size': qrData['shirt_size'] ?? '',
+            'claimed': qrData['claimed'] == true || qrData['claimed'] == 1 || qrData['claimed'] == '1',
+            'claimed_at': qrData['claimed_at'],
+            'race_status': qrData['race_status'] ?? 'registered',
+            'is_present': qrData['is_present'] == true || qrData['is_present'] == 1,
+            'checked_in_at': qrData['checked_in_at'],
           };
         });
-      } else {
-        if (mounted) setState(() => _checkingRegistration = false);
       }
+    } on ApiException {
+      // 404 = not registered
+      if (mounted) setState(() => _checkingRegistration = false);
     } catch (_) {
       if (mounted) setState(() => _checkingRegistration = false);
     }
@@ -116,11 +139,43 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
     }
   }
 
+  String _formatTime(String? raw) {
+    if (raw == null) return '';
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final m = dt.minute.toString().padLeft(2, '0');
+      final ampm = dt.hour < 12 ? 'AM' : 'PM';
+      return '$h:$m $ampm';
+    } catch (_) {
+      return '';
+    }
+  }
+
   String _countdownLabel(Duration d) {
     final h = d.inHours;
     final m = d.inMinutes % 60;
     final s = d.inSeconds % 60;
     return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _scanToCheckIn() async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const RunnerQrScannerScreen()),
+    );
+    if (result == true) {
+      // Refresh registration data to show checked-in state
+      await _checkIfRegistered();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✓ Checked in successfully!'),
+            backgroundColor: Color(0xFF00FF9C),
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -129,7 +184,15 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
     final status = race['status']?.toString() ?? 'upcoming';
     final isActive = status == 'active';
     final isFinished = status == 'finished';
+    final isRaceDay = status == 'race_day';
     final canRegister = !isFinished && !isActive && !_isRegistered;
+
+    final regStatus = _registrationData?['race_status'] as String? ?? 'registered';
+    final isClaimed = _registrationData?['claimed'] == true;
+    final isPresent = _registrationData?['is_present'] == true;
+    final checkedInAt = _registrationData?['checked_in_at'] as String?;
+    final canCheckIn = _isRegistered && isClaimed && !isPresent && !isFinished;
+    final checkInEnabled = _isRegistered && !isFinished;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A0F),
@@ -150,7 +213,12 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
           statusBarIconBrightness: Brightness.light,
         ),
       ),
-      body: SingleChildScrollView(
+      body: RefreshIndicator(
+        color: const Color(0xFF00FF9C),
+        backgroundColor: const Color(0xFF0D0D14),
+        onRefresh: _checkIfRegistered,
+        child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -217,7 +285,7 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
 
             const SizedBox(height: 20),
 
-            // ── Info grid (2×2 cards) ────────────────────────
+            // ── Info grid (2×3 cards) ────────────────────────
             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
@@ -299,9 +367,32 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
               ),
             ],
 
+            // ── Runner Registration Section ───────────────────
+            if (_isRegistered && _registrationData != null) ...[
+              const SizedBox(height: 24),
+
+              // Bib + Shirt + Status
+              _buildRegistrationCard(regStatus),
+
+              const SizedBox(height: 12),
+
+              // Claiming Section
+              _buildClaimingCard(isClaimed),
+
+              const SizedBox(height: 12),
+
+              // Check-in Section
+              _buildCheckinCard(
+                isPresent: isPresent,
+                canCheckIn: canCheckIn,
+                checkInEnabled: checkInEnabled,
+                checkedInAt: checkedInAt,
+              ),
+            ],
+
             const SizedBox(height: 32),
 
-            // ── Action button ────────────────────────────────
+            // ── Unregistered action area (body) ──────────────
             if (_checkingRegistration)
               const Center(child: CircularProgressIndicator())
             else if (isActive && _isRegistered)
@@ -313,38 +404,16 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
                   final prefs = await SharedPreferences.getInstance();
                   final raceId = race['id'] as int;
                   await prefs.setInt('active_race_id', raceId);
-
-                  // Pre-fetch so RunnerMapScreen opens with data ready
                   await Future.wait([
                     ApiService.getCheckpoints(raceId),
                     ApiService.getRaces(),
                   ]);
-
                   if (!context.mounted) return;
                   Navigator.pushAndRemoveUntil(
                     context,
                     MaterialPageRoute(builder: (_) => const RunnerMapScreen()),
                     (_) => false,
                   );
-                },
-              )
-            else if (_isRegistered)
-              const _InfoBanner(
-                message: '✅ You are registered for this race.',
-                color: Color(0xFF00FF9C),
-              )
-            else if (canRegister)
-              _ActionButton(
-                label: 'Register',
-                color: const Color(0xFF00B4FF),
-                textColor: Colors.black,
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => RaceRegistrationScreen(race: race),
-                    ),
-                  ).then((_) => _checkIfRegistered());
                 },
               ),
 
@@ -378,6 +447,7 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
             ],
           ],
         ),
+      ),
       ),
 
       // ── Sticky bottom action ──────────────────────────────
@@ -490,7 +560,7 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
                               borderRadius: BorderRadius.circular(12)),
                         ),
                         child: const Text(
-                          'Join Race',
+                          'Register',
                           style: TextStyle(
                               fontSize: 16, fontWeight: FontWeight.bold),
                         ),
@@ -544,6 +614,365 @@ class _RaceDetailScreenState extends State<RaceDetailScreen> {
                 ],
               ),
             ),
+    );
+  }
+
+  // ── YOUR REGISTRATION card ──────────────────────────────────────────────────
+  Widget _buildRegistrationCard(String regStatus) {
+    final bib = _registrationData?['bib_number'];
+    final shirt = _registrationData?['shirt_size'] as String? ?? '';
+    final bibLabel = bib != null ? '#${bib.toString()}' : '—';
+
+    Color statusColor;
+    String statusLabel;
+    switch (regStatus) {
+      case 'present':
+        statusColor = const Color(0xFF00B4FF);
+        statusLabel = 'Checked In';
+        break;
+      case 'finished':
+        statusColor = const Color(0xFF00FF9C);
+        statusLabel = 'Finished';
+        break;
+      default:
+        statusColor = const Color(0xFFFFB800);
+        statusLabel = 'Registered';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'YOUR REGISTRATION',
+                style: TextStyle(
+                  color: Color(0xFF666680),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: statusColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: statusColor.withOpacity(0.4)),
+                ),
+                child: Text(
+                  statusLabel,
+                  style: TextStyle(
+                    color: statusColor,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              // Bib Number
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'BIB NUMBER',
+                      style: TextStyle(
+                          color: Color(0xFF444460), fontSize: 9, letterSpacing: 1),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      bibLabel,
+                      style: const TextStyle(
+                        color: Color(0xFF00FF9C),
+                        fontSize: 36,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(width: 1, height: 44, color: const Color(0xFF1E1E30)),
+              const SizedBox(width: 16),
+              // Shirt Size
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'SHIRT SIZE',
+                    style: TextStyle(
+                        color: Color(0xFF444460), fontSize: 9, letterSpacing: 1),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    shirt.isNotEmpty ? shirt : '—',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── CLAIMING card ───────────────────────────────────────────────────────────
+  Widget _buildClaimingCard(bool isClaimed) {
+    final race = widget.race;
+    final venue = race['location']?.toString() ?? '&DOTSports HQ';
+    final startRaw = race['scheduled_start'] as String?;
+    final claimDate = startRaw != null
+        ? '${_formatDate(startRaw)} · 10:00 AM – 5:00 PM'
+        : 'See event details';
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: isClaimed
+            ? const Color(0xFF00FF9C).withOpacity(0.05)
+            : const Color(0xFFFFB800).withOpacity(0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isClaimed
+              ? const Color(0xFF00FF9C).withOpacity(0.25)
+              : const Color(0xFFFFB800).withOpacity(0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'BIB CLAIMING',
+                style: TextStyle(
+                  color: isClaimed
+                      ? const Color(0xFF00FF9C)
+                      : const Color(0xFFFFB800),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: isClaimed
+                      ? const Color(0xFF00FF9C).withOpacity(0.12)
+                      : const Color(0xFFFFB800).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (isClaimed)
+                      const Icon(Icons.check_circle_outline,
+                          size: 11, color: Color(0xFF00FF9C)),
+                    if (isClaimed) const SizedBox(width: 4),
+                    Text(
+                      isClaimed ? 'CLAIMED ✓' : 'UNCLAIMED',
+                      style: TextStyle(
+                        color: isClaimed
+                            ? const Color(0xFF00FF9C)
+                            : const Color(0xFFFFB800),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.location_on_outlined,
+                  size: 14,
+                  color: isClaimed
+                      ? const Color(0xFF00FF9C)
+                      : const Color(0xFFFFB800)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(venue,
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 13, height: 1.4)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(Icons.calendar_today_outlined,
+                  size: 14,
+                  color: isClaimed
+                      ? const Color(0xFF00FF9C)
+                      : const Color(0xFFFFB800)),
+              const SizedBox(width: 8),
+              Text(claimDate,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── CHECK-IN card ───────────────────────────────────────────────────────────
+  Widget _buildCheckinCard({
+    required bool isPresent,
+    required bool canCheckIn,
+    required bool checkInEnabled,
+    required String? checkedInAt,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D0D14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.07)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'RACE CHECK-IN',
+            style: TextStyle(
+              color: Color(0xFF666680),
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.2,
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          if (isPresent)
+            // Confirmed state
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00FF9C).withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: const Color(0xFF00FF9C).withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.verified_rounded,
+                      color: Color(0xFF00FF9C), size: 20),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Checked In ✓',
+                        style: TextStyle(
+                          color: Color(0xFF00FF9C),
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (checkedInAt != null)
+                        Text(
+                          '${_formatDate(checkedInAt)} at ${_formatTime(checkedInAt)}',
+                          style: const TextStyle(
+                              color: Color(0xFF666680), fontSize: 11),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            )
+          else if (checkInEnabled && !canCheckIn && !isPresent)
+            // Bib not yet claimed — show grayed scan button with hint
+            Container(
+              width: double.infinity,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.lock_outline, size: 16, color: Color(0xFF333348)),
+                  SizedBox(width: 8),
+                  Text(
+                    'Claim your bib first to check in',
+                    style: TextStyle(color: Color(0xFF444460), fontSize: 13),
+                  ),
+                ],
+              ),
+            )
+          else if (checkInEnabled)
+            // Bib claimed — scan button active
+            SizedBox(
+              width: double.infinity,
+              height: 48,
+              child: ElevatedButton.icon(
+                onPressed: canCheckIn ? _scanToCheckIn : null,
+                icon: const Icon(Icons.qr_code_scanner_rounded, size: 18),
+                label: const Text('Scan to Check In',
+                    style:
+                        TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00B4FF),
+                  foregroundColor: Colors.black,
+                  disabledBackgroundColor:
+                      const Color(0xFF00B4FF).withOpacity(0.3),
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            )
+          else
+            Container(
+              width: double.infinity,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.flag_outlined, size: 16, color: Color(0xFF333348)),
+                  SizedBox(width: 8),
+                  Text(
+                    'Race has ended',
+                    style: TextStyle(color: Color(0xFF333348), fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -681,9 +1110,8 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-//  Action Button — primary CTA on race detail
+//  Action Button
 // ─────────────────────────────────────────────────────────────────────────────
 class _ActionButton extends StatelessWidget {
   final String label;
@@ -720,41 +1148,6 @@ class _ActionButton extends StatelessWidget {
             fontWeight: FontWeight.bold,
             letterSpacing: 0.3,
           ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Info Banner — status message (registered, finished, etc.)
-// ─────────────────────────────────────────────────────────────────────────────
-class _InfoBanner extends StatelessWidget {
-  final String message;
-  final Color color;
-
-  const _InfoBanner({
-    required this.message,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.3)),
-      ),
-      child: Text(
-        message,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: color,
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
         ),
       ),
     );

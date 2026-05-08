@@ -25,6 +25,11 @@ def get_staff_user(race_id: int, credentials: HTTPAuthorizationCredentials = Dep
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     role = payload.get("role")
+
+    # Organizers have full access — no assignment check needed
+    if role == "organizer":
+        return payload
+
     if role not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="Staff access required")
 

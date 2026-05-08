@@ -4,13 +4,10 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/features/leaderboard/screens/final_results_screen.dart';
-import 'package:andotrack_app/features/leaderboard/screens/leaderboard_screen.dart';
 import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
 import 'package:andotrack_app/features/race/screens/race_detail_screen.dart';
-import 'package:andotrack_app/features/runner/screens/qr_screen.dart';
 import 'package:andotrack_app/features/runner/screens/race_history_screen.dart';
 import 'package:andotrack_app/features/runner/screens/runner_profile_screen.dart';
-import 'package:andotrack_app/features/runner/screens/settings_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  RunnerDashboardScreen — Bottom nav shell (Home | Race History | Profile)
@@ -251,15 +248,25 @@ class _HomeTabState extends State<_HomeTab>
               .where((r) => r['user_id'] == _userId);
           if (match.isNotEmpty) {
             final runner = match.first;
+            // Fetch bib + shirt from QR endpoint (includes extra fields)
+            int? bib;
+            String shirt = '';
+            try {
+              final qrData = await ApiService.getRunnerQr(
+                runnerId: _userId!,
+                raceId: raceId,
+              );
+              bib = qrData['bib_number'] as int?;
+              shirt = qrData['shirt_size'] as String? ?? '';
+            } catch (_) {}
             newRegistrations[raceId] = {
               'race_id': raceId,
               'race_name': race['name'],
               'runner_name': _userName,
-              // FIX: qr_token and qr_image_base64 may not be in the
-              // runners list endpoint — use empty string as fallback.
-              // The QrScreen will show gracefully with empty values.
               'qr_token': runner['qr_token'] ?? '',
               'qr_image_base64': runner['qr_image_base64'] ?? '',
+              'bib_number': bib,
+              'shirt_size': shirt,
             };
           }
         } catch (_) {
@@ -502,9 +509,11 @@ class _HomeTabState extends State<_HomeTab>
         itemCount: _myRaces.length,
         itemBuilder: (ctx, i) {
           final race = _myRaces[i];
+          final raceId = race['id'] as int;
           return _MyRaceCard(
             race: race,
-            countdown: _countdowns[race['id'] as int],
+            countdown: _countdowns[raceId],
+            registrationData: _registrationByRace[raceId],
             onTap: () => _joinRace(race),
           );
         },
@@ -591,12 +600,14 @@ class _HomeTabState extends State<_HomeTab>
 class _MyRaceCard extends StatelessWidget {
   final Map<String, dynamic> race;
   final String? countdown;
+  final Map<String, dynamic>? registrationData;
   final VoidCallback onTap;
 
   const _MyRaceCard({
     required this.race,
     required this.countdown,
     required this.onTap,
+    this.registrationData,
   });
 
   @override
@@ -700,6 +711,49 @@ class _MyRaceCard extends StatelessWidget {
                     ]),
                 ],
               ),
+
+              // Bib number row
+              if (registrationData?['bib_number'] != null) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00FF9C).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                            color: const Color(0xFF00FF9C).withOpacity(0.25)),
+                      ),
+                      child: Text(
+                        'Bib #${registrationData!['bib_number']}',
+                        style: const TextStyle(
+                          color: Color(0xFF00FF9C),
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    if ((registrationData!['shirt_size'] as String?)?.isNotEmpty == true) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Size ${registrationData!['shirt_size']}',
+                          style: const TextStyle(
+                              color: Color(0xFF666680), fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
 
               const SizedBox(height: 12),
 
@@ -826,6 +880,18 @@ class _BrowseRaceCard extends StatelessWidget {
 
   const _BrowseRaceCard({required this.race, required this.onTap});
 
+  String _formatDate(String? raw) {
+    if (raw == null) return '';
+    try {
+      final dt = DateTime.parse(raw);
+      const months = ['','Jan','Feb','Mar','Apr','May','Jun',
+          'Jul','Aug','Sep','Oct','Nov','Dec'];
+      return '${months[dt.month]} ${dt.day}, ${dt.year}';
+    } catch (_) {
+      return '';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final status = race['status']?.toString() ?? 'upcoming';
@@ -833,6 +899,8 @@ class _BrowseRaceCard extends StatelessWidget {
     final distance = race['distance_km'];
     final fee = race['registration_fee'] ?? 0;
     final slots = race['slots_remaining'];
+    final location = race['location']?.toString() ?? '';
+    final dateLabel = _formatDate(race['scheduled_start'] as String?);
 
     return GestureDetector(
       onTap: onTap,
@@ -864,7 +932,38 @@ class _BrowseRaceCard extends StatelessWidget {
                 ],
               ),
 
-              const SizedBox(height: 8),
+              if (location.isNotEmpty) ...[
+                const SizedBox(height: 5),
+                Row(children: [
+                  const Icon(Icons.place_outlined,
+                      size: 12, color: Color(0xFF444460)),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      location,
+                      style: const TextStyle(
+                          color: Color(0xFF666680), fontSize: 12),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ]),
+              ],
+
+              if (dateLabel.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Row(children: [
+                  const Icon(Icons.calendar_today_outlined,
+                      size: 12, color: Color(0xFF444460)),
+                  const SizedBox(width: 4),
+                  Text(
+                    dateLabel,
+                    style: const TextStyle(
+                        color: Color(0xFF666680), fontSize: 12),
+                  ),
+                ]),
+              ],
+
+              const SizedBox(height: 10),
 
               // Chips row
               Wrap(
@@ -873,8 +972,8 @@ class _BrowseRaceCard extends StatelessWidget {
                 children: [
                   if (distance != null)
                     _InfoChip(
-                      icon: Icons.place_outlined,
-                      label: '${distance}K',
+                      icon: Icons.straighten_outlined,
+                      label: '${distance}km',
                     ),
                   if ((fee as num) > 0)
                     _InfoChip(

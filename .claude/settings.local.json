@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\janlo\\\\AndoTrack\\\\andotrack_app\\\\lib\" -File | Where-Object { $_.Name -match \"\\(main|router|app\\\\.dart\\)\" })"
+    ]
+  }
+}

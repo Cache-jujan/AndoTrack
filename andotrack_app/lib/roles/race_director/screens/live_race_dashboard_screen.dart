@@ -225,7 +225,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   }
 
   Future<void> _resolveAnomaly(int anomalyId) async {
-    try { await ApiService.resolveAnomaly(anomalyId); } catch (_) {}
+    try { await ApiService.resolveAnomaly(_raceId, anomalyId); } catch (_) {}
     _pollAll();
   }
 
