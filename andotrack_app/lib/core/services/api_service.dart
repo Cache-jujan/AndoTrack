@@ -447,8 +447,14 @@ class ApiService {
       headers: headers,
     );
     if (res.statusCode != 200) {
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      throw ApiException(body['detail'] ?? 'Check-in failed.');
+      try {
+        final body = jsonDecode(res.body) as Map<String, dynamic>;
+        throw ApiException(body['detail']?.toString() ?? 'Check-in failed (${res.statusCode}).');
+      } on ApiException {
+        rethrow;
+      } catch (_) {
+        throw ApiException('Check-in failed (${res.statusCode}). Please try again.');
+      }
     }
   }
 
