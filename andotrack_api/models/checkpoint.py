@@ -18,5 +18,5 @@ class RunnerCheckpoint(Base):
     id = Column(Integer, primary_key=True, index=True)
     runner_id = Column(Integer)
     checkpoint_id = Column(Integer)
-    passed_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    passed_at = Column(DateTime, default=datetime.datetime.utcnow)
     __table_args__ = (UniqueConstraint("runner_id", "checkpoint_id"),)
