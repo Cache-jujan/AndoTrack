@@ -64,6 +64,7 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
   // Poll / live indicator
   Timer? _pollTimer;
   Timer? _liveTickTimer;
+  Timer? _statusPollTimer;
   DateTime? _lastUpdated;
   int _secondsSinceUpdate = 0;
 
@@ -78,6 +79,7 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
 
     if (_state == _CheckinState.before) {
       _startCountdown();
+      _startStatusPoll();
     } else if (_state == _CheckinState.open) {
       _startPolling();
     }
@@ -88,6 +90,7 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
     _countdownTimer?.cancel();
     _pollTimer?.cancel();
     _liveTickTimer?.cancel();
+    _statusPollTimer?.cancel();
     super.dispose();
   }
 
@@ -108,6 +111,7 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
   DateTime? _parseOpensAt() {
     // Prefer a dedicated check-in timestamp; fall back to race date fields
     final iso = widget.raceData['check_in_opens_at']
+        ?? widget.raceData['scheduled_start']
         ?? widget.raceData['date']
         ?? widget.raceData['race_date'];
     if (iso == null) return null;
@@ -134,6 +138,7 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
     final remaining = _opensAt!.difference(DateTime.now());
     if (remaining.isNegative) {
       _countdownTimer?.cancel();
+      _statusPollTimer?.cancel();
       setState(() {
         _state = _CheckinState.open;
         _timeUntilOpen = Duration.zero;
@@ -142,6 +147,31 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
     } else {
       setState(() => _timeUntilOpen = remaining);
     }
+  }
+
+  // Polls the race status every 30 s while in the before state so the screen
+  // transitions to open as soon as the Race Director sets the race to race_day,
+  // independent of whether a check_in_opens_at time is configured.
+  void _startStatusPoll() {
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 30), (_) async {
+      if (!mounted || _state != _CheckinState.before) {
+        _statusPollTimer?.cancel();
+        return;
+      }
+      try {
+        final race = await ApiService.getRace(widget.raceId);
+        if (!mounted) return;
+        final newState = _deriveState(race['status']?.toString());
+        if (newState != _CheckinState.before) {
+          _countdownTimer?.cancel();
+          _statusPollTimer?.cancel();
+          setState(() => _state = newState);
+          if (newState == _CheckinState.open) _startPolling();
+        }
+      } catch (_) {
+        // Silent fail — keep current state
+      }
+    });
   }
 
   // ── Live polling ──────────────────────────────────────────────────────────

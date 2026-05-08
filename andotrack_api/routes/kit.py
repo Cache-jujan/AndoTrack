@@ -70,7 +70,7 @@ def claim_kit(
         raise HTTPException(status_code=400, detail="Kit already claimed for this runner")
 
     rr.claimed    = True
-    rr.claimed_at = datetime.datetime.utcnow()
+    rr.claimed_at = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
 
     return {
@@ -107,7 +107,7 @@ def walkin_assign(
     available.walkin_name    = name
     available.walkin_contact = contact_number
     available.claimed        = True
-    available.claimed_at     = datetime.datetime.utcnow()
+    available.claimed_at     = datetime.datetime.now(datetime.timezone.utc)
     db.commit()
 
     return {

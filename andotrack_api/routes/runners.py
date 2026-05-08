@@ -351,7 +351,7 @@ def finish_race(
     rank = finished_count + 1
  
     # Save result
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     result = RaceResult(
         race_id=race_id,
         runner_id=runner_id,

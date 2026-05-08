@@ -11,6 +11,8 @@
 // Assignment filter: getRaces() → parallel getStaffAccounts(raceId) per race
 // → keep only races where staff_id (or user_id or id) matches the logged-in user_id.
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
@@ -45,7 +47,7 @@ class _KitStaffShellState extends State<KitStaffShell> {
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     _userId = _readUserId(prefs);
-    if (mounted) setState(() => _userName = prefs.getString('user_name') ?? 'Staff');
+    _userName = prefs.getString('user_name') ?? 'Staff';
     await _loadRaces();
   }
 
@@ -388,18 +390,22 @@ class _KitRaceCardState extends State<_KitRaceCard> {
   Future<void> _loadCounts() async {
     try {
       final raceId = (widget.race['id'] as num).toInt();
-      final runners = await ApiService.getRaceRunners(raceId);
-      final claimed = runners.where((r) =>
-        r['kit_claimed'] == true ||
-        r['shirt_claimed'] == true ||
-        r['is_kit_claimed'] == true,
-      ).length;
-      if (mounted) {
-        setState(() {
-          _total         = runners.length;
-          _claimed       = claimed;
-          _loadingCounts = false;
-        });
+      final res = await ApiService.get('/kit/$raceId/runners?status=all');
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final runners = decoded is List
+            ? decoded.cast<Map<String, dynamic>>()
+            : <Map<String, dynamic>>[];
+        final claimed = runners.where((r) => r['claimed'] == true).length;
+        if (mounted) {
+          setState(() {
+            _total         = runners.length;
+            _claimed       = claimed;
+            _loadingCounts = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _loadingCounts = false);
       }
     } catch (_) {
       // Counts unavailable — show dashes instead of failing the card
@@ -436,7 +442,7 @@ class _KitRaceCardState extends State<_KitRaceCard> {
     final race    = widget.race;
     final name    = race['name']?.toString() ?? 'Unnamed Race';
     final status  = race['status']?.toString();
-    final dateIso = race['date'] ?? race['started_at'] ?? race['created_at'];
+    final dateIso = race['scheduled_start'] ?? race['date'] ?? race['started_at'] ?? race['created_at'];
 
     final (statusColor, statusLabel) = _statusMeta(status);
 

@@ -33,7 +33,7 @@ class Race(Base):
     registration_fee    = Column(Float, default=0.0)
     banner_url          = Column(String(500))       # optional poster/image URL
 
-    created_at          = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at          = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 class RaceRunner(Base):
@@ -42,7 +42,7 @@ class RaceRunner(Base):
     id              = Column(Integer, primary_key=True, index=True)
     race_id         = Column(Integer, ForeignKey("races.id"), nullable=False)
     runner_id       = Column(Integer, ForeignKey("users.id"), nullable=False)
-    registered_at   = Column(DateTime, default=datetime.datetime.utcnow)
+    registered_at   = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     # Registration form fields
     city                = Column(String(100))
