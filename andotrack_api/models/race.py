@@ -57,12 +57,12 @@ class RaceRunner(Base):
     # Check-in / QR
     qr_token        = Column(String(100), unique=True, index=True)
     is_present      = Column(Boolean, default=False)
-    checked_in_at   = Column(DateTime, nullable=True)
+    checked_in_at   = Column(DateTime(timezone=True), nullable=True)
     race_status     = Column(String(20), default="registered")  # registered → active → finished
     bib_number      = Column(Integer, nullable=True)
     shirt_size      = Column(String(5), nullable=True)
     claimed         = Column(Boolean, default=False)
-    claimed_at      = Column(DateTime, nullable=True)
+    claimed_at      = Column(DateTime(timezone=True), nullable=True)
     is_walkin       = Column(Boolean, default=False)
     walkin_name     = Column(String(100), nullable=True)
     walkin_contact  = Column(String(30), nullable=True)

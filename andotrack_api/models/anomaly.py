@@ -7,7 +7,7 @@ class Anomaly(Base):
     id = Column(Integer, primary_key=True, index=True)
     race_id = Column(Integer)
     runner_id = Column(Integer)
-    detected_at = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
+    detected_at = Column(DateTime, default=datetime.datetime.utcnow)
     reason = Column(String(255))
     score = Column(Float)
     lat = Column(Float)
