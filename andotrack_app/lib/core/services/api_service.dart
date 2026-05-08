@@ -73,13 +73,14 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> registerForRace({
-    required int raceId,
-    required String city,
-    required String contactNumber,
-    required String emergencyContact,
-    required String email,
-    required bool isFirstMarathon,
-    required String sex,
+  required int raceId,
+  required String city,
+  required String contactNumber,
+  required String emergencyContact,
+  required String email,
+  required bool isFirstMarathon,
+  required String sex,
+  required String shirtSize, 
   }) async {
     final headers = await _authHeaders();
     final res = await http.post(
@@ -92,6 +93,7 @@ class ApiService {
         'is_first_marathon': isFirstMarathon,
         'sex': sex,
         'email': email,
+        'shirt_size': shirtSize,
       }),
     );
     if (res.statusCode == 200) {
@@ -438,7 +440,31 @@ class ApiService {
     throw ApiException('Could not fetch QR status.');
   }
 
-  // ── Staff Accounts ────────────────────────────────────────────────────────
+  static Future<void> selfCheckIn({required int raceId}) async {
+    final headers = await _authHeaders();
+    final res = await http.post(
+      Uri.parse('$_base/races/$raceId/checkin/self'),
+      headers: headers,
+    );
+    if (res.statusCode != 200) {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      throw ApiException(body['detail'] ?? 'Check-in failed.');
+    }
+  }
+
+  static Future<Map<String, dynamic>> getRunnerResults(int runnerId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/runners/$runnerId/results'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Could not load results.');
+  }
+
+  // ── Staff accounts ────────────────────────────────────────────────────────
 
   static Future<List<Map<String, dynamic>>> getStaffAccounts(int raceId) async {
     final headers = await _authHeaders();
@@ -447,17 +473,11 @@ class ApiService {
       headers: headers,
     );
     if (res.statusCode == 200) {
-      final decoded = jsonDecode(res.body);
-      if (decoded is List) return decoded.cast<Map<String, dynamic>>();
-      return [];
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
     }
-    if (res.statusCode == 404) return [];
-    throw Exception('Failed to load staff (${res.statusCode})');
+    throw ApiException('Could not load staff accounts.');
   }
 
-  /// Creates a staff account for [raceId].
-  /// Backend generates the temp password and returns it as `temp_password`.
-  /// Params are sent as query params — the backend route uses FastAPI defaults.
   static Future<Map<String, dynamic>> createStaffAccount(
     int raceId, {
     required String name,
@@ -465,20 +485,16 @@ class ApiService {
     required String role,
   }) async {
     final headers = await _authHeaders();
-    final uri = Uri.parse('$_base/races/$raceId/staff').replace(
-      queryParameters: {'name': name, 'email': email, 'role': role},
+    final res = await http.post(
+      Uri.parse('$_base/races/$raceId/staff'),
+      headers: headers,
+      body: jsonEncode({'name': name, 'email': email, 'role': role}),
     );
-    final res = await http.post(uri, headers: headers);
     if (res.statusCode == 200 || res.statusCode == 201) {
       return jsonDecode(res.body) as Map<String, dynamic>;
     }
-    try {
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      throw Exception(body['detail'] ?? 'Failed to create staff account');
-    } catch (e) {
-      if (e is Exception) rethrow;
-      throw Exception('Failed to create staff account (${res.statusCode})');
-    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    throw ApiException(body['detail'] ?? 'Failed to create staff account.');
   }
 
   static Future<void> deactivateStaffAccount(int raceId, int staffId) async {
@@ -487,14 +503,9 @@ class ApiService {
       Uri.parse('$_base/races/$raceId/staff/$staffId/deactivate'),
       headers: headers,
     );
-    if (res.statusCode != 200 && res.statusCode != 204) {
-      try {
-        final body = jsonDecode(res.body) as Map<String, dynamic>;
-        throw Exception(body['detail'] ?? 'Failed to deactivate staff account');
-      } catch (e) {
-        if (e is Exception) rethrow;
-        throw Exception('Failed to deactivate staff account (${res.statusCode})');
-      }
+    if (res.statusCode != 200) {
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      throw ApiException(body['detail'] ?? 'Failed to deactivate staff.');
     }
   }
 
@@ -503,60 +514,84 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getAnomalies(int raceId) async {
     final headers = await _authHeaders();
     final res = await http.get(
-      Uri.parse('$_base/anomalies/$raceId'),
+      Uri.parse('$_base/races/$raceId/anomalies'),
       headers: headers,
     );
     if (res.statusCode == 200) {
-      final list = jsonDecode(res.body) as List;
-      return list.cast<Map<String, dynamic>>();
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
     }
-    if (res.statusCode == 404) return [];
-    throw Exception('Failed to load anomalies (${res.statusCode})');
+    return [];
   }
 
-  static Future<void> resolveAnomaly(int anomalyId) async {
+  static Future<void> resolveAnomaly(int raceId, int anomalyId) async {
     final headers = await _authHeaders();
-    final res = await http.patch(
-      Uri.parse('$_base/anomalies/$anomalyId/resolve'),
+    await http.patch(
+      Uri.parse('$_base/races/$raceId/anomalies/$anomalyId/resolve'),
       headers: headers,
     );
-    if (res.statusCode != 200) {
-      final body = jsonDecode(res.body) as Map<String, dynamic>;
-      throw Exception(body['detail'] ?? 'Failed to resolve anomaly');
-    }
   }
 
   static Future<Map<String, dynamic>> getAnomalyReport(int raceId) async {
     final headers = await _authHeaders();
     final res = await http.get(
-      Uri.parse('$_base/anomalies/$raceId/report'),
+      Uri.parse('$_base/races/$raceId/anomalies'),
       headers: headers,
     );
     if (res.statusCode == 200) {
-      return jsonDecode(res.body) as Map<String, dynamic>;
+      final all = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+      final resolved   = all.where((a) => a['resolved'] == true).length;
+      final unresolved = all.length - resolved;
+      final counts = <String, int>{};
+      for (final a in all) { counts[a['reason']?.toString() ?? 'unknown'] = (counts[a['reason']?.toString() ?? 'unknown'] ?? 0) + 1; }
+      return {
+        'total':         all.length,
+        'vehicle_speed': counts['vehicle_speed'] ?? 0,
+        'gps_jump':      counts['gps_jump'] ?? 0,
+        'off_route':     counts['off_route'] ?? 0,
+        'erratic':       counts['erratic'] ?? 0,
+        'resolved':      resolved,
+        'unresolved':    unresolved,
+        'flagged_runners': all.map((a) => a['runner_id']).toSet().toList(),
+      };
     }
-    // Return a zeroed-out report when the endpoint isn't live yet
-    return {
-      'total': 0, 'vehicle_speed': 0, 'gps_jump': 0,
-      'off_route': 0, 'erratic': 0,
-      'resolved': 0, 'unresolved': 0,
-      'flagged_runners': <dynamic>[],
-    };
+    throw ApiException('Could not load anomaly report.');
   }
 
-  // ── Race settings update ──────────────────────────────────────────────────
+  // ── Race settings ─────────────────────────────────────────────────────────
 
   static Future<void> updateRaceSettings(
       int raceId, Map<String, dynamic> settings) async {
     final headers = await _authHeaders();
-    final res = await http.patch(
+    await http.patch(
       Uri.parse('$_base/races/$raceId'),
       headers: headers,
       body: jsonEncode(settings),
     );
+  }
+
+  // ── Kit claiming ──────────────────────────────────────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getKitRunners(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/kit/$raceId/runners?status=all'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    }
+    throw ApiException('Could not load registrations.');
+  }
+
+  static Future<void> claimKit(int raceId, int runnerId) async {
+    final headers = await _authHeaders();
+    final res = await http.patch(
+      Uri.parse('$_base/kit/$raceId/runners/$runnerId/claim'),
+      headers: headers,
+    );
     if (res.statusCode != 200) {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
-      throw Exception(body['detail'] ?? 'Failed to update race settings');
+      throw ApiException(body['detail'] ?? 'Claim failed.');
     }
   }
 }
