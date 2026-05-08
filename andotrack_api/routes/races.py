@@ -691,7 +691,7 @@ def create_staff(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if user.get("role") != "organizer":
+    if user.get("role") not in ("organizer", "race_director"):
         raise HTTPException(status_code=403, detail="Only organizers can create staff.")
 
     if role not in ("kit_staff", "checkin_staff"):
@@ -738,7 +738,7 @@ def get_staff(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if user.get("role") != "organizer":
+    if user.get("role") not in ("organizer", "race_director"):
         raise HTTPException(status_code=403, detail="Only organizers can view staff.")
 
     assignments = db.query(StaffAssignment).filter(
@@ -767,7 +767,7 @@ def deactivate_staff(
     db: Session = Depends(get_db),
     user=Depends(get_current_user),
 ):
-    if user.get("role") != "organizer":
+    if user.get("role") not in ("organizer", "race_director"):
         raise HTTPException(status_code=403, detail="Only organizers can deactivate staff.")
 
     assignment = db.query(StaffAssignment).filter(
