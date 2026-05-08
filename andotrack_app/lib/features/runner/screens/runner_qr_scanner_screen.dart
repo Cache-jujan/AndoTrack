@@ -46,10 +46,11 @@ class _RunnerQrScannerScreenState extends State<RunnerQrScannerScreen> {
       setState(() => _processing = false);
       _showError(e.message);
       await _ctrl.start();
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('[QRScanner] unexpected error: $e\n$st');
       if (!mounted) return;
       setState(() => _processing = false);
-      _showError('Check-in failed. Try again.');
+      _showError('Check-in failed: $e');
       await _ctrl.start();
     }
   }

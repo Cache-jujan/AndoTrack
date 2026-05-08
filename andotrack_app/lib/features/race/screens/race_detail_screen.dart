@@ -87,8 +87,6 @@ class _RaceDetailScreenState extends State<RaceDetailScreen>
         raceId: raceId,
       );
 
-      debugPrint('[RaceDetail] userId=$userId raceId=$raceId claimed=${qrData['claimed']} bib=${qrData['bib_number']}');
-
       // Cache QR for offline display
       final b64 = qrData['qr_image_base64']?.toString() ?? '';
       final token = qrData['qr_token']?.toString() ?? '';

@@ -846,17 +846,6 @@ def self_checkin(
     if not race:
         raise HTTPException(status_code=404, detail="Race not found.")
 
-    # Check window if scheduled_start is set
-    if race.scheduled_start:
-        now = datetime.datetime.now(datetime.timezone.utc)
-        window_open  = race.scheduled_start - datetime.timedelta(hours=2)
-        window_close = race.scheduled_start + datetime.timedelta(hours=1)
-        if not (window_open <= now <= window_close):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Check-in is not open for this race."
-            )
-
     registration = db.query(RaceRunner).filter(
         RaceRunner.race_id   == race_id,
         RaceRunner.runner_id == runner_id,
