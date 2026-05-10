@@ -290,6 +290,7 @@ def get_runner_results(
             "race_date": race.scheduled_start if race else None,
             # Performance
             "rank": result.rank,
+            "segment": result.segment,
             "distance_km": result.distance_km,
             "pace_formatted": result.pace_formatted,
             "finished_at": result.finished_at,

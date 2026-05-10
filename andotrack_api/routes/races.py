@@ -510,23 +510,11 @@ def finish_race(
     
     standings = get_all_runners_distance(race_id)
     print(f"DEBUG finish_race: race_id={race_id}, standings count={len(standings)}")
-    # ── Fallback: if GPS tracker is empty (server restart / no pings received)
-    # use all checked-in runners from DB so finish always succeeds.
     if not standings:
-        checked_in = db.query(RaceRunner).filter(
-            RaceRunner.race_id == race_id,
-            RaceRunner.is_present == True,
-        ).all()
-        standings = [
-            {
-                "runner_id":          str(rr.runner_id),
-                "distance_metres":    0.0,
-                "distance_km":        0.0,
-                "distance_formatted": "0 m",
-                "gps_points_recorded": 0,
-            }
-            for rr in checked_in
-        ]
+        raise HTTPException(
+            status_code=409,
+            detail="No GPS data recorded for this race. Ensure runners have started tracking before finishing the race.",
+        )
 
     now = datetime.datetime.now(datetime.timezone.utc)
     saved = []
