@@ -172,6 +172,29 @@ def stop_race(
     race.status = "finished"
     db.commit()
     db.refresh(race)
+
+    # Snapshot leaderboard into race_results so results survive a server restart.
+    # Only runs if results have not already been saved (e.g. via /finish).
+    existing = db.query(RaceResult).filter(RaceResult.race_id == race_id).first()
+    if not existing:
+        standings = get_all_runners_distance(race_id)
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for rank, entry in enumerate(standings, start=1):
+            runner_id = int(entry["runner_id"])
+            pace_data = get_runner_pace_summary(str(runner_id))
+            db.add(RaceResult(
+                race_id         = race_id,
+                runner_id       = runner_id,
+                rank            = rank,
+                distance_metres = entry["distance_metres"],
+                distance_km     = entry["distance_km"],
+                pace_min_per_km = pace_data.get("pace_min_per_km"),
+                pace_formatted  = pace_data.get("pace_formatted"),
+                finished_at     = now,
+            ))
+        if standings:
+            db.commit()
+
     return {"message": f"Race '{race.name}' has finished!", "status": race.status}
 
 
@@ -399,6 +422,8 @@ def get_race_runners(
                 "sex":               rr.sex,
                 "is_present":        rr.is_present,
                 "checked_in_at":     rr.checked_in_at,
+                "race_status":       rr.race_status,
+                "bib_number":        rr.bib_number,
                 "last_lat":          last_lat,
                 "last_lng":          last_lng,
             })

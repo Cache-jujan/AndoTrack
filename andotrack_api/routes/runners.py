@@ -10,6 +10,7 @@ import os
 from models.race import Race, RaceRunner
 from models.user import User
 from models.anomaly import Anomaly
+from models.result import RaceResult
 from database import get_db
 from utils.dependencies import get_current_user
 from utils.pace import record_speed, get_runner_pace_summary, get_pace_min_per_km, format_pace
@@ -286,7 +287,7 @@ def get_runner_results(
             "race_id": result.race_id,
             "race_name": race.name if race else "Unknown Race",
             "race_distance_km": race.distance_km if race else None,
-            "race_date": race.race_date if race else None,
+            "race_date": race.scheduled_start if race else None,
             # Performance
             "rank": result.rank,
             "distance_km": result.distance_km,
