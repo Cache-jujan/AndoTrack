@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 import 'package:andotrack_app/roles/race_director/screens/race_setup_screen.dart';
 import 'package:andotrack_app/roles/race_director/screens/live_race_dashboard_screen.dart';
 import 'package:andotrack_app/roles/race_director/screens/post_race_screen.dart';
@@ -426,7 +427,7 @@ class _RaceCard extends StatelessWidget {
 
   static String _formatDate(String raw) {
     try {
-      final dt = DateTime.parse(raw).toLocal();
+      final dt = parsePht(raw);
       const months = ['','Jan','Feb','Mar','Apr','May','Jun',
                       'Jul','Aug','Sep','Oct','Nov','Dec'];
       final h = dt.hour.toString().padLeft(2, '0');

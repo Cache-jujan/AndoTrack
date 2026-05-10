@@ -43,12 +43,14 @@ class LocationService {
     }
   }
 
-  /// Continuous GPS stream, filtered to ≥5 m movement, high accuracy.
+  /// Continuous GPS stream — fires every ≥2 s with no distance filter so REST
+  /// posts reach the backend even when the runner is stationary at race start.
   static Stream<Position> getLocationStream() {
     return Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
+      locationSettings: AndroidSettings(
+        accuracy:         LocationAccuracy.high,
+        distanceFilter:   0,
+        intervalDuration: const Duration(seconds: 2),
       ),
     );
   }
