@@ -4,7 +4,8 @@ from utils.distance_tracker import get_all_runners_distance, get_last_position
 from utils.auth import hash_password
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import OperationalError
 import datetime
 import secrets
 import string
@@ -398,35 +399,69 @@ def get_race_runners(
     if not race:
         raise HTTPException(status_code=404, detail="Race not found.")
 
-    race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+    # ORM query may fail on Railway if DB migrations are pending (missing columns).
+    # Fall back to a minimal raw-SQL query so the endpoint never 500s.
+    try:
+        race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+        use_orm = True
+    except OperationalError:
+        db.rollback()
+        use_orm = False
+        race_runners = db.execute(
+            text(
+                "SELECT runner_id, is_present, checked_in_at, city, contact_number,"
+                " is_first_marathon, emergency_contact, sex, registered_at"
+                " FROM race_runners WHERE race_id = :rid"
+            ),
+            {"rid": race_id},
+        ).mappings().all()
 
     result = []
     for rr in race_runners:
-        runner = db.query(User).filter(User.id == rr.runner_id).first()
+        runner_id = rr.runner_id if use_orm else rr["runner_id"]
+        runner = db.query(User).filter(User.id == runner_id).first()
         if runner:
-            # Fetch last known GPS position for this runner in this race
             last_pos = get_last_position(race_id, str(runner.id))
             last_lat = last_pos[0] if last_pos else None
             last_lng = last_pos[1] if last_pos else None
-            
-            result.append({
-                "user_id":           runner.id,
-                "name":              runner.name,
-                "email":             runner.email,
-                "role":              runner.role,
-                "registered_at":     rr.registered_at,
-                "city":              rr.city,
-                "contact_number":    rr.contact_number,
-                "is_first_marathon": rr.is_first_marathon,
-                "emergency_contact": rr.emergency_contact,
-                "sex":               rr.sex,
-                "is_present":        rr.is_present,
-                "checked_in_at":     rr.checked_in_at,
-                "race_status":       rr.race_status,
-                "bib_number":        rr.bib_number,
-                "last_lat":          last_lat,
-                "last_lng":          last_lng,
-            })
+            if use_orm:
+                result.append({
+                    "user_id":           runner.id,
+                    "name":              runner.name,
+                    "email":             runner.email,
+                    "role":              runner.role,
+                    "registered_at":     rr.registered_at,
+                    "city":              rr.city,
+                    "contact_number":    rr.contact_number,
+                    "is_first_marathon": rr.is_first_marathon,
+                    "emergency_contact": rr.emergency_contact,
+                    "sex":               rr.sex,
+                    "is_present":        rr.is_present,
+                    "checked_in_at":     rr.checked_in_at,
+                    "race_status":       getattr(rr, "race_status", None),
+                    "bib_number":        getattr(rr, "bib_number", None),
+                    "last_lat":          last_lat,
+                    "last_lng":          last_lng,
+                })
+            else:
+                result.append({
+                    "user_id":           runner.id,
+                    "name":              runner.name,
+                    "email":             runner.email,
+                    "role":              runner.role,
+                    "registered_at":     rr["registered_at"],
+                    "city":              rr["city"],
+                    "contact_number":    rr["contact_number"],
+                    "is_first_marathon": rr["is_first_marathon"],
+                    "emergency_contact": rr["emergency_contact"],
+                    "sex":               rr["sex"],
+                    "is_present":        rr["is_present"],
+                    "checked_in_at":     rr["checked_in_at"],
+                    "race_status":       None,
+                    "bib_number":        None,
+                    "last_lat":          last_lat,
+                    "last_lng":          last_lng,
+                })
 
     return result
 
