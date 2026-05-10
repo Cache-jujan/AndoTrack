@@ -33,7 +33,7 @@ class Race(Base):
     registration_fee    = Column(Float, default=0.0)
     banner_url          = Column(String(500))       # optional poster/image URL
 
-    created_at          = Column(DateTime, default=datetime.datetime.utcnow)
+    created_at          = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
 
 class RaceRunner(Base):
@@ -42,7 +42,7 @@ class RaceRunner(Base):
     id              = Column(Integer, primary_key=True, index=True)
     race_id         = Column(Integer, ForeignKey("races.id"), nullable=False)
     runner_id       = Column(Integer, ForeignKey("users.id"), nullable=False)
-    registered_at   = Column(DateTime, default=datetime.datetime.utcnow)
+    registered_at   = Column(DateTime, default=lambda: datetime.datetime.now(datetime.timezone.utc))
 
     # Registration form fields
     city                = Column(String(100))
@@ -57,12 +57,12 @@ class RaceRunner(Base):
     # Check-in / QR
     qr_token        = Column(String(100), unique=True, index=True)
     is_present      = Column(Boolean, default=False)
-    checked_in_at   = Column(DateTime, nullable=True)
+    checked_in_at   = Column(DateTime(timezone=True), nullable=True)
     race_status     = Column(String(20), default="registered")  # registered → active → finished
     bib_number      = Column(Integer, nullable=True)
-    shirt_size      = Column(String(5), nullable=True)
+    shirt_size      = Column(String(10), nullable=False)
     claimed         = Column(Boolean, default=False)
-    claimed_at      = Column(DateTime, nullable=True)
+    claimed_at      = Column(DateTime(timezone=True), nullable=True)
     is_walkin       = Column(Boolean, default=False)
     walkin_name     = Column(String(100), nullable=True)
     walkin_contact  = Column(String(30), nullable=True)

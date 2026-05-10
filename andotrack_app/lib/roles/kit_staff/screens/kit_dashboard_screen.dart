@@ -17,6 +17,8 @@
 //
 // This file is WEB-only. Do NOT import runner_* or mobile widgets here.
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 
@@ -102,12 +104,19 @@ class _KitDashboardScreenState extends State<KitDashboardScreen> {
   Future<void> _loadRunners() async {
     if (mounted) setState(() { _loading = true; _error = null; });
     try {
-      final data = await ApiService.getRaceRunners(widget.raceId);
-      if (mounted) {
+      final res = await ApiService.get('/kit/${widget.raceId}/runners?status=all');
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final list = decoded is List
+            ? decoded.cast<Map<String, dynamic>>()
+            : <Map<String, dynamic>>[];
         setState(() {
-          _runners = data.map((r) => Map<String, dynamic>.from(r)).toList();
+          _runners = list.map((r) => Map<String, dynamic>.from(r)).toList();
           _loading = false;
         });
+      } else {
+        setState(() { _error = 'Could not load runners.'; _loading = false; });
       }
     } catch (e) {
       if (mounted) setState(() { _error = 'Could not load runners.'; _loading = false; });
@@ -127,15 +136,13 @@ class _KitDashboardScreenState extends State<KitDashboardScreen> {
     setState(() {
       _runners[idx] = {
         ..._runners[idx],
-        'kit_claimed':    true,
-        'shirt_claimed':  true,
-        'is_kit_claimed': true,
+        'claimed': true,
       };
     });
 
     ApiService.patch(
-      '/runners/$id/claim-kit',
-      {'kit_claimed': true},
+      '/kit/${widget.raceId}/runners/$id/claim',
+      {'claimed': true},
     ).then((res) {
       if (mounted && res.statusCode != 200 && res.statusCode != 204) {
         _revert(idx, original);
@@ -168,7 +175,7 @@ class _KitDashboardScreenState extends State<KitDashboardScreen> {
       builder: (_) => _WalkInDialog(
         onSubmit: (name, contact) async {
           final res = await ApiService.post(
-            '/races/${widget.raceId}/walk-in',
+            '/kit/${widget.raceId}/walkin',
             {'name': name, 'contact_number': contact},
           );
           if (res.statusCode != 200 && res.statusCode != 201) {
@@ -201,10 +208,7 @@ class _KitDashboardScreenState extends State<KitDashboardScreen> {
     return (v as num).toInt();
   }
 
-  static bool _isClaimed(Map<String, dynamic> r) =>
-    r['kit_claimed']    == true ||
-    r['shirt_claimed']  == true ||
-    r['is_kit_claimed'] == true;
+  static bool _isClaimed(Map<String, dynamic> r) => r['claimed'] == true;
 
   static String _runnerName(Map<String, dynamic> r) =>
     (r['name'] ?? r['full_name'] ?? r['runner_name'] ?? 'Unknown').toString();

@@ -1,6 +1,6 @@
 from models.result import RaceResult
 from utils.pace import get_runner_pace_summary
-from utils.distance_tracker import get_all_runners_distance
+from utils.distance_tracker import get_all_runners_distance, get_last_position
 from utils.auth import hash_password
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -342,7 +342,7 @@ def checkin_runner(
         )
 
     # Mark present
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     registration.is_present    = True
     registration.checked_in_at = now
     db.commit()
@@ -367,8 +367,9 @@ def get_race_runners(
     user=Depends(get_current_user),
 ):
     """
-    Returns all registered runners with their registration details
-    and present/absent status. Used in organizer_race_dashboard.
+    Returns all registered runners with their registration details,
+    present/absent status, and latest GPS coordinates (if available).
+    Used in organizer_race_dashboard and live map rendering.
     """
     race = db.query(Race).filter(Race.id == race_id).first()
     if not race:
@@ -380,6 +381,11 @@ def get_race_runners(
     for rr in race_runners:
         runner = db.query(User).filter(User.id == rr.runner_id).first()
         if runner:
+            # Fetch last known GPS position for this runner in this race
+            last_pos = get_last_position(race_id, str(runner.id))
+            last_lat = last_pos[0] if last_pos else None
+            last_lng = last_pos[1] if last_pos else None
+            
             result.append({
                 "user_id":           runner.id,
                 "name":              runner.name,
@@ -393,6 +399,8 @@ def get_race_runners(
                 "sex":               rr.sex,
                 "is_present":        rr.is_present,
                 "checked_in_at":     rr.checked_in_at,
+                "last_lat":          last_lat,
+                "last_lng":          last_lng,
             })
 
     return result
@@ -495,7 +503,7 @@ def finish_race(
             for rr in checked_in
         ]
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     saved = []
     result_objects = []
 
@@ -979,17 +987,6 @@ def self_checkin(
     if not race:
         raise HTTPException(status_code=404, detail="Race not found.")
 
-    # Check window if scheduled_start is set
-    if race.scheduled_start:
-        now = datetime.datetime.utcnow()
-        window_open  = race.scheduled_start - datetime.timedelta(hours=2)
-        window_close = race.scheduled_start + datetime.timedelta(hours=1)
-        if not (window_open <= now <= window_close):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Check-in is not open for this race."
-            )
-
     registration = db.query(RaceRunner).filter(
         RaceRunner.race_id   == race_id,
         RaceRunner.runner_id == runner_id,
@@ -1001,7 +998,7 @@ def self_checkin(
     if registration.is_present:
         raise HTTPException(status_code=400, detail="You are already checked in.")
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     registration.is_present    = True
     registration.checked_in_at = now
     registration.race_status   = "present"

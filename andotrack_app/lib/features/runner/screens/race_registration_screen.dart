@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:andotrack_app/core/services/api_service.dart';
-import 'package:andotrack_app/features/runner/screens/qr_screen.dart';
+import 'package:andotrack_app/features/runner/screens/payment_screen.dart';
 
 class RaceRegistrationScreen extends StatefulWidget {
   final Map<String, dynamic> race;
@@ -15,10 +14,15 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
   final _contactController = TextEditingController();
   final _emergencyController = TextEditingController();
   final _emailController = TextEditingController();
+
   String _sex = 'prefer_not_to_say';
   bool _isFirstMarathon = false;
+  bool _agreedToTerms = false;
+  String _shirtSize = 'M';
   bool _isLoading = false;
   String? _error;
+
+  static const _sizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
 
   @override
   void dispose() {
@@ -29,42 +33,35 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
     super.dispose();
   }
 
-  Future<void> _submit() async {
+  void _submit() {
     if (_cityController.text.trim().isEmpty ||
-        _emailController.text.trim().isEmpty || 
+        _emailController.text.trim().isEmpty ||
         _contactController.text.trim().isEmpty ||
         _emergencyController.text.trim().isEmpty) {
       setState(() => _error = 'Please fill in all fields.');
       return;
     }
-
-    setState(() { _isLoading = true; _error = null; });
-
-    try {
-      final raceId = widget.race['id'] as int;
-      final result = await ApiService.registerForRace(
-        raceId: raceId,
-        city: _cityController.text.trim(),
-        email: _emailController.text.trim(),
-        contactNumber: _contactController.text.trim(),
-        emergencyContact: _emergencyController.text.trim(),
-        isFirstMarathon: _isFirstMarathon,
-        sex: _sex,
-      );
-
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => QrScreen(
-            registrationData: result,
-            raceName: widget.race['name'] ?? 'Race',
-          ),
-        ),
-      );
-    } catch (e) {
-      setState(() { _error = e.toString(); _isLoading = false; });
+    if (!_agreedToTerms) {
+      setState(() => _error = 'Please agree to the Terms & Conditions.');
+      return;
     }
+    setState(() => _error = null);
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PaymentScreen(
+          race: widget.race,
+          shirtSize: _shirtSize,
+          city: _cityController.text.trim(),
+          email: _emailController.text.trim(),
+          contactNumber: _contactController.text.trim(),
+          emergencyContact: _emergencyController.text.trim(),
+          sex: _sex,
+          isFirstMarathon: _isFirstMarathon,
+        ),
+      ),
+    );
   }
 
   @override
@@ -81,6 +78,7 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+
             // Race name header
             Container(
               width: double.infinity,
@@ -98,6 +96,61 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
                     fontWeight: FontWeight.bold),
               ),
             ),
+
+            const SizedBox(height: 24),
+
+            // ── Shirt size picker ──────────────────────────────────────
+            const Text(
+              'SHIRT SIZE',
+              style: TextStyle(
+                color: Color(0xFF888899),
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: _sizes.map((size) {
+                final selected = _shirtSize == size;
+                return GestureDetector(
+                  onTap: () => setState(() => _shirtSize = size),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 46,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? const Color(0xFF0D2B3A)
+                          : const Color(0xFF0D0D14),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: selected
+                            ? const Color(0xFF00B4FF)
+                            : const Color(0xFF1E1E30),
+                        width: selected ? 1.5 : 1,
+                      ),
+                    ),
+                    child: Center(
+                      child: Text(
+                        size,
+                        style: TextStyle(
+                          color: selected
+                              ? const Color(0xFF00B4FF)
+                              : Colors.white54,
+                          fontSize: 12,
+                          fontWeight: selected
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+            // ── End shirt size picker ──────────────────────────────────
 
             const SizedBox(height: 24),
 
@@ -175,13 +228,74 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
               child: SwitchListTile(
                 title: const Text('First Marathon?',
                     style: TextStyle(color: Colors.white, fontSize: 13)),
-                subtitle: const Text('Let organizers know this is your first race',
+                subtitle: const Text(
+                    'Let organizers know this is your first race',
                     style: TextStyle(color: Colors.white38, fontSize: 11)),
                 value: _isFirstMarathon,
                 activeColor: const Color(0xFF00FF9C),
                 onChanged: (v) => setState(() => _isFirstMarathon = v),
               ),
             ),
+
+            const SizedBox(height: 20),
+
+            // ── Terms & Conditions checkbox ────────────────────────────
+            GestureDetector(
+              onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0D0D14),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF1E1E30)),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 150),
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: _agreedToTerms
+                            ? const Color(0xFF00B4FF)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(5),
+                        border: Border.all(
+                          color: _agreedToTerms
+                              ? const Color(0xFF00B4FF)
+                              : const Color(0xFF444460),
+                        ),
+                      ),
+                      child: _agreedToTerms
+                          ? const Icon(Icons.check, color: Colors.black, size: 15)
+                          : null,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: RichText(
+                        text: const TextSpan(
+                          style: TextStyle(
+                              color: Colors.white70, fontSize: 13, height: 1.5),
+                          children: [
+                            TextSpan(text: 'I have read and agree to the '),
+                            TextSpan(
+                              text: 'Terms & Conditions',
+                              style: TextStyle(
+                                color: Color(0xFF00B4FF),
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                            TextSpan(text: ' and acknowledge the race waiver.'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // ── End terms ──────────────────────────────────────────────
 
             const SizedBox(height: 24),
 
@@ -196,7 +310,8 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
                   border: Border.all(color: Colors.red.withOpacity(0.4)),
                 ),
                 child: Text(_error!,
-                    style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+                    style:
+                        const TextStyle(color: Colors.redAccent, fontSize: 13)),
               ),
 
             SizedBox(
@@ -229,7 +344,7 @@ class _RaceRegistrationScreenState extends State<RaceRegistrationScreen> {
   }
 }
 
-// ── Supporting widgets ────────────────────────────────────────────────────────
+// ── Supporting widgets (untouched) ────────────────────────────────────────────
 
 class _Label extends StatelessWidget {
   final String text;

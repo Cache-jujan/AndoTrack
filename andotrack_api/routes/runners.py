@@ -236,8 +236,13 @@ def get_runner_qr(
         "race_id":         race_id,
         "qr_token":        registration.qr_token,
         "qr_image_base64": qr_image_b64,
-        "is_present":      registration.is_present,
+        "is_present":      bool(registration.is_present) if registration.is_present is not None else False,
         "checked_in_at":   registration.checked_in_at,
+        "bib_number":      registration.bib_number,
+        "shirt_size":      registration.shirt_size,
+        "claimed":         bool(registration.claimed) if registration.claimed is not None else False,
+        "claimed_at":      registration.claimed_at,
+        "race_status":     registration.race_status or "registered",
     }
 
 # ── Race history ──────────────────────────────────────────────────────────────
@@ -351,7 +356,7 @@ def finish_race(
     rank = finished_count + 1
  
     # Save result
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc)
     result = RaceResult(
         race_id=race_id,
         runner_id=runner_id,

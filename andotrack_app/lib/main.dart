@@ -17,7 +17,7 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  FirebaseAuth.instance.signInAnonymously().catchError((_) {});
+  FirebaseAuth.instance.signInAnonymously().ignore();
   await NotificationService.init();
   runApp(const ProviderScope(child: MyApp()));
 }

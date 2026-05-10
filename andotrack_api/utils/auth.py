@@ -1,6 +1,6 @@
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -15,7 +15,7 @@ def create_token(data: dict, race_id: int = None) -> str:
     payload = data.copy()
     if race_id is not None:
         payload["race_id"] = race_id
-    expire = datetime.utcnow() + timedelta(
+    expire = datetime.now(timezone.utc) + timedelta(
         minutes=int(os.getenv("JWT_EXPIRE_MINUTES", 60))
     )
     payload.update({"exp": expire})
