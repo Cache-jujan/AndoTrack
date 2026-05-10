@@ -1,6 +1,7 @@
 // MOVED TO: lib/features/map/screens/runner_map_screen.dart
 
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -13,7 +14,6 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/core/services/routing_service.dart';
 import 'package:andotrack_app/core/services/notification_service.dart';
-import 'package:andotrack_app/features/checkin/screens/runner_checkin_gate_screen.dart';
 import 'package:andotrack_app/features/runner/screens/personal_results_screen.dart';
 import 'package:andotrack_app/features/runner/screens/runner_stats_screen.dart';
 import 'package:andotrack_app/features/runner/screens/settings_screen.dart';
@@ -35,7 +35,8 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
   late AnimationController _livePulseCtrl;
 
   // ── Runner identity ───────────────────────────────────────
-  int? _runnerId;
+  int? _runnerId;       // user account ID — used for Firebase paths
+  int? _runnerRecordId; // RaceRunner.id — used for checkpoint arrival API
   int? _raceId;
 
   // ── Map state ─────────────────────────────────────────────
@@ -50,6 +51,11 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
   bool _gpsReady = false;
   bool _mapMoved = false;
 
+  // ── GPS cold-start phase flag ─────────────────────────────
+  // true until the first position is available; stream starts with
+  // distanceFilter: 0 and switches to 5 once the first fix arrives.
+  bool _gpsInitPhase = true;
+
   // ── HUD ───────────────────────────────────────────────────
   final Stopwatch _stopwatch = Stopwatch();
   Timer? _hudTimer;
@@ -61,9 +67,6 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
   String _raceName = '';
   String? _scheduledStart;
   Map<String, dynamic>? _raceData;
-
-  // ── QR Validation gate ────────────────────────────────────
-  bool _isValidated = false;
 
   // ── Connectivity + offline queue ──────────────────────────
   bool _isOnline = true;
@@ -96,11 +99,7 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
     if (_raceId == null) return;
 
     await _loadRaceStatus();
-
-    if (_raceStatus == 'active' && _runnerId != null && _raceId != null) {
-      await _checkValidation();
-      if (!_isValidated) return;
-    }
+    await _loadRunnerRecordId();
 
     await _startGPS();
     await _loadCheckpoints();
@@ -185,40 +184,28 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
     );
   }
 
-  // ── QR Validation ─────────────────────────────────────────
+  // ── Runner record ID lookup ───────────────────────────────
+  // The checkpoint arrival API requires the RaceRunner.id (registration
+  // record), not the user account ID. Fetch the runner list and find the
+  // entry whose user_id matches the logged-in user.
 
-  Future<void> _checkValidation() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('qr_validated_$_raceId') == true) {
-      if (mounted) setState(() => _isValidated = true);
-      return;
-    }
-
+  Future<void> _loadRunnerRecordId() async {
+    if (_runnerId == null || _raceId == null) return;
     try {
-      final data = await ApiService.getRunnerQr(
-        runnerId: _runnerId!,
-        raceId: _raceId!,
-      );
-      if (data['is_present'] == true) {
-        await prefs.setBool('qr_validated_$_raceId', true);
-        if (mounted) setState(() => _isValidated = true);
-        return;
+      final runners = await ApiService.getRaceRunners(_raceId!);
+      final match = runners
+          .where((r) => (r['user_id'] as num?)?.toInt() == _runnerId)
+          .toList();
+      if (match.isNotEmpty) {
+        _runnerRecordId = (match.first['id'] as num?)?.toInt() ?? _runnerId;
+        debugPrint('[Init] RaceRunner record: record_id=$_runnerRecordId user_id=$_runnerId');
+      } else {
+        _runnerRecordId = _runnerId;
+        debugPrint('[Init] No RaceRunner record for user_id=$_runnerId — fallback to user_id');
       }
-    } catch (_) {}
-
-    if (!mounted) return;
-    final validated = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => RunnerCheckinGateScreen(
-          raceId: _raceId!,
-          runnerId: _runnerId!,
-          raceName: _raceName,
-        ),
-      ),
-    );
-    if (validated == true && mounted) {
-      setState(() => _isValidated = true);
+    } catch (e) {
+      _runnerRecordId = _runnerId;
+      debugPrint('[Init] Runner record lookup failed: $e — using user_id=$_runnerId');
     }
   }
 
@@ -249,6 +236,15 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
   }
 
   // ── GPS ───────────────────────────────────────────────────
+  //
+  // Two-phase cold-start strategy:
+  //   Phase 1 (_gpsInitPhase == true):  distanceFilter: 0  — fires on any movement
+  //   Phase 2 (_gpsInitPhase == false): distanceFilter: 5  — filters micro-jitter
+  //
+  // Fallback order before the stream starts:
+  //   1. getLastKnownPosition()            — instant (OS cache)
+  //   2. getCurrentPosition(medium)        — 2–5 s via cell/WiFi triangulation
+  //   3. Phase-1 stream with filter: 0     — fires on first satellite event
 
   Future<void> _startGPS() async {
     LocationPermission perm = await Geolocator.checkPermission();
@@ -261,27 +257,57 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
     }
     if (perm == LocationPermission.denied) return;
 
+    // Fallback 1: last known position (instant — OS cache, no I/O wait)
     try {
       final last = await Geolocator.getLastKnownPosition();
       if (last != null && mounted) {
         setState(() {
-          _myPosition = LatLng(last.latitude, last.longitude);
+          _myPosition   = LatLng(last.latitude, last.longitude);
           _lastPosition = last;
+          _gpsInitPhase = false;
         });
         _mapController.move(_myPosition!, 16);
       }
     } catch (_) {}
 
+    // Fallback 2: medium-accuracy one-shot if still no position (2–5 s)
+    if (_myPosition == null) {
+      try {
+        final medium = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.medium,
+        );
+        if (mounted) {
+          setState(() {
+            _myPosition   = LatLng(medium.latitude, medium.longitude);
+            _lastPosition = medium;
+            _gpsInitPhase = false;
+          });
+          _mapController.move(_myPosition!, 16);
+        }
+      } catch (_) {}
+    }
+
+    _subscribePositionStream();
+  }
+
+  // Subscribes the position stream. Uses distanceFilter: 0 during the init
+  // phase (no position yet) and distanceFilter: 5 once a position exists.
+  // When the first event arrives in init phase, switches to the filtered stream.
+  void _subscribePositionStream() {
+    _positionSub?.cancel();
     _positionSub = Geolocator.getPositionStream(
       locationSettings: AndroidSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
+        accuracy:         LocationAccuracy.high,
+        distanceFilter:   _gpsInitPhase ? 0 : 5,
         forceLocationManager: false,
         intervalDuration: const Duration(seconds: 2),
       ),
     ).listen((pos) {
       if (!mounted) return;
       if (_gpsReady && pos.accuracy > 100) return;
+
+      // Remember whether we are switching from init phase this event
+      final bool switchingToFiltered = _gpsInitPhase;
 
       final bool wasFirstFix = !_gpsReady && pos.accuracy <= 80;
       if (wasFirstFix) {
@@ -302,8 +328,9 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
       final bool hadNoPosition = _myPosition == null;
       final newPos = LatLng(pos.latitude, pos.longitude);
       setState(() {
-        _myPosition = newPos;
+        _myPosition   = newPos;
         _lastPosition = pos;
+        _gpsInitPhase = false;
       });
 
       if (!_mapMoved) {
@@ -319,6 +346,11 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
         _pushToFirebase(pos);
       }
       _checkCheckpointProximity(pos);
+
+      // First event in init phase — restart with distanceFilter: 5
+      if (switchingToFiltered) {
+        _subscribePositionStream();
+      }
     }, onError: (e) => debugPrint('GPS error: $e'));
   }
 
@@ -462,21 +494,46 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
     if (next == null) return;
     if (_notifiedCheckpointIds.contains(next.id)) return;
 
+    // Client-side radius floor: never use less than 30 m regardless of what
+    // the organizer set — GPS accuracy alone can be ±15–30 m.
+    final effectiveRadius = max(next.radiusMeters.toDouble(), 30.0);
     final dist = Geolocator.distanceBetween(
       pos.latitude, pos.longitude, next.lat, next.lng,
     );
-    if (dist <= next.radiusMeters) {
+
+    debugPrint(
+      '[Checkpoint] cp=${next.id} name="${next.name}" '
+      'dist=${dist.toStringAsFixed(1)} m '
+      'radius=${effectiveRadius.toStringAsFixed(0)} m '
+      'runnerRecord=$_runnerRecordId',
+    );
+
+    if (dist <= effectiveRadius) {
+      // 1. Update local state immediately — do NOT wait for Firebase echo.
+      //    This unblocks _nextCheckpoint right away so the UI advances.
+      setState(() => _passedCheckpointIds = {..._passedCheckpointIds, next.id});
+
+      // 2. Lock deduplication AFTER local update.
       _notifiedCheckpointIds.add(next.id);
 
+      // 3. Write to Firebase (best-effort, also drives _listenToPassedCheckpoints).
       FirebaseDatabase.instance
           .ref('races/$_raceId/runner_checkpoints/$_runnerId/${next.id}')
           .set(DateTime.now().toIso8601String());
 
-      ApiService.arriveAtCheckpoint(next.id, _runnerId!);
-      NotificationService.showCheckpointPassed(next.name);
+      // 4. Notify backend using the RaceRunner record ID (not user account ID).
+      final arrivalRunnerId = _runnerRecordId ?? _runnerId!;
+      ApiService.arriveAtCheckpoint(next.id, arrivalRunnerId).then((_) {
+        debugPrint('[Checkpoint] Server confirmed: cp=${next.id} runner=$arrivalRunnerId');
+      }).catchError((e) {
+        debugPrint('[Checkpoint] Server arrival failed: cp=${next.id} runner=$arrivalRunnerId error=$e');
+      });
 
+      NotificationService.showCheckpointPassed(next.name);
       HapticFeedback.mediumImpact();
-      final remaining = _checkpoints.length - _passedCheckpointIds.length - 1;
+
+      // _passedCheckpointIds now includes next.id, so remaining is correct.
+      final remaining = _checkpoints.length - _passedCheckpointIds.length;
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -624,7 +681,30 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
         backgroundColor: const Color(0xFF0A0A0F),
         body: Stack(
           children: [
-            _buildMap(),
+            // Show loading state if GPS not ready yet, else show map
+            if (_myPosition == null)
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const CircularProgressIndicator(
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        Color(0xFF00FF9C),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Getting your location…',
+                      style: TextStyle(
+                        color: Color(0xFF8888AA),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              _buildMap(),
             _buildTopBar(),
             if (!_isLive) _buildWaitingBanner(),
             _buildLocateMeButton(),
@@ -649,10 +729,11 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
         },
       ),
       children: [
+        // CartoDB dark tiles — OSM was 403-blocked for Flutter apps
         TileLayer(
           urlTemplate:
               'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-          subdomains: const ['a', 'b', 'c', 'd'],
+          subdomains: ['a', 'b', 'c', 'd'],
         ),
 
         if (_routePolyline.length >= 2)
@@ -735,92 +816,84 @@ class _RunnerMapScreenState extends State<RunnerMapScreen>
     );
   }
 
+  // Single full-bleed glass bar — fixed height 52px, no nested pill container,
+  // Expanded(_GpsPill) takes all remaining width so it can never overflow.
   Widget _buildTopBar() {
+    final topPad = MediaQuery.of(context).padding.top;
     return Positioned(
-      top: MediaQuery.of(context).padding.top + 8,
-      left: 16,
-      right: 16,
-      child: Row(
-        children: [
-          _TopButton(
-            icon: Icons.arrow_back,
-            onTap: () => Navigator.maybePop(context),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0D0D14).withOpacity(0.92),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFF1E1E30)),
-              ),
-              child: Row(
-                children: [
-                  // AndoTrack logo text
-                  const Text(
-                    'AndoTrack',
-                    style: TextStyle(
-                      color: Color(0xFF00FF9C),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: -0.3,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _raceName.isNotEmpty ? _raceName : 'No race selected',
-                      style: const TextStyle(
-                          color: Colors.white54,
-                          fontSize: 11),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (_isLive) ...[
-                    const SizedBox(width: 6),
-                    _LiveBadge(controller: _livePulseCtrl),
-                  ] else
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF444460).withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        _raceStatus.toUpperCase(),
-                        style: const TextStyle(
-                            color: Color(0xFF666680),
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1),
-                      ),
-                    ),
-                ],
+      top: 0,
+      left: 0,
+      right: 0,
+      child: Container(
+        color: const Color(0xFF0D0D14).withOpacity(0.92),
+        padding: EdgeInsets.fromLTRB(8, topPad + 6, 8, 0),
+        height: topPad + 52,
+        child: Row(
+          children: [
+            _TopButton(
+              icon: Icons.arrow_back,
+              onTap: () => Navigator.maybePop(context),
+            ),
+            const SizedBox(width: 6),
+            const Text(
+              'AndoTrack',
+              style: TextStyle(
+                color: Color(0xFF00FF9C),
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          _TopButton(
-            icon: Icons.settings,
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-          const SizedBox(width: 6),
-          _GpsPill(
-            isReady: _gpsReady,
-            accuracy: _lastPosition?.accuracy,
-          ),
-        ],
+            const SizedBox(width: 6),
+            if (_isLive)
+              _LiveBadge(controller: _livePulseCtrl)
+            else
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF444460).withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                      color: const Color(0xFF444460).withOpacity(0.3)),
+                ),
+                child: Text(
+                  _raceStatus.toUpperCase(),
+                  style: const TextStyle(
+                    color: Color(0xFF666680),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 6),
+            // Expanded absorbs all remaining space — _GpsPill can never push
+            // outside Row bounds regardless of GPS text length or screen width.
+            Expanded(
+              child: _GpsPill(
+                isReady: _gpsReady,
+                accuracy: _lastPosition?.accuracy,
+              ),
+            ),
+            const SizedBox(width: 6),
+            _TopButton(
+              icon: Icons.settings,
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _buildWaitingBanner() {
+    // Bar ends at padding.top + 52; add 8px gap.
+    final topPad = MediaQuery.of(context).padding.top;
     return Positioned(
-      top: MediaQuery.of(context).padding.top + 72,
+      top: topPad + 60,
       left: 16,
       right: 16,
       child: Container(
@@ -960,7 +1033,7 @@ class _LiveBadge extends StatelessWidget {
       builder: (_, __) {
         final opacity = 0.6 + 0.4 * controller.value;
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
           decoration: BoxDecoration(
             color: const Color(0xFF00FF9C).withOpacity(0.15 * opacity),
             borderRadius: BorderRadius.circular(6),
@@ -982,7 +1055,7 @@ class _LiveBadge extends StatelessWidget {
                   shape: BoxShape.circle,
                 ),
               ),
-              const SizedBox(width: 5),
+              const SizedBox(width: 4),
               Text(
                 'LIVE',
                 style: TextStyle(
@@ -991,9 +1064,9 @@ class _LiveBadge extends StatelessWidget {
                     const Color(0xFF00FF9C),
                     controller.value,
                   ),
-                  fontSize: 9,
+                  fontSize: 11,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
+                  letterSpacing: 0.5,
                 ),
               ),
             ],
@@ -1029,7 +1102,7 @@ class _HudStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       color: const Color(0xFF0D0D14),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1314,14 +1387,14 @@ class _TopButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 40,
-        height: 40,
+        width: 36,
+        height: 36,
         decoration: BoxDecoration(
-          color: const Color(0xFF0D0D14).withOpacity(0.92),
+          color: const Color(0xFF1A1A28),
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0xFF1E1E30)),
+          border: Border.all(color: const Color(0xFF2A2A40)),
         ),
-        child: Icon(icon, color: Colors.white70, size: 20),
+        child: Icon(icon, color: Colors.white70, size: 18),
       ),
     );
   }
@@ -1339,29 +1412,34 @@ class _GpsPill extends StatelessWidget {
     final color =
         isReady ? const Color(0xFF00FF9C) : const Color(0xFFFFB800);
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D0D14).withOpacity(0.92),
+        color: const Color(0xFF111120),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.5)),
+        border: Border.all(color: color.withOpacity(0.4)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(
-              isReady ? Icons.gps_fixed : Icons.gps_not_fixed,
-              size: 13,
-              color: color),
-          const SizedBox(width: 5),
-          Text(
-            isReady
-                ? 'GPS ±${accuracy?.toStringAsFixed(0) ?? '--'}m'
-                : 'Acquiring…',
-            style: TextStyle(
+            isReady ? Icons.gps_fixed : Icons.gps_not_fixed,
+            size: 12,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              isReady
+                  ? 'GPS ±${accuracy?.toStringAsFixed(0) ?? '--'}m'
+                  : 'Acquiring…',
+              style: TextStyle(
                 color: color,
                 fontSize: 11,
-                fontWeight: FontWeight.w600),
+                fontWeight: FontWeight.w600,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
           ),
         ],
       ),

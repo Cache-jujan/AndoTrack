@@ -1,18 +1,9 @@
-// lib/roles/race_director/screens/race_setup_screen.dart
-//
-// WEB-ONLY pre-race command screen for Race Director.
-// Shown when tapping any race with status: upcoming / registration_open / race_day.
-//
-// Responsibilities:
-//   • 4-tab layout: Registrations, Checkpoints, Staff Accounts, Race Settings
-//   • Prominent Start Race button (active only on race_day status)
-//   • Navigates to LiveRaceDashboardScreen after a successful race start
-
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/features/checkpoint/services/checkpoint_service.dart';
 import 'package:andotrack_app/roles/race_director/screens/checkpoint_placement_screen.dart';
@@ -71,7 +62,8 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
   bool       _settingsSaved      = false;
 
   // ── Race start ────────────────────────────────────────────────────────────
-  bool _startingRace = false;
+  bool _startingRace   = false;
+  bool _markingRaceDay = false;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   int    get _raceId     => (_race['id'] as num).toInt();
@@ -85,8 +77,30 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
     super.initState();
     _race    = Map<String, dynamic>.from(widget.race);
     _tabCtrl = TabController(length: 4, vsync: this);
-    _walkInSlots = (_race['walk_in_slots'] as num?)?.toInt() ?? 0;
-    _walkInCtrl  = TextEditingController(text: '$_walkInSlots');
+    _walkInSlots        = (_race['walk_in_slots'] as num?)?.toInt() ?? 0;
+    _walkInCtrl         = TextEditingController(text: '$_walkInSlots');
+    _gpsAccuracy        = ((_race['gps_accuracy_threshold'] as num?)?.toDouble() ?? 15.0).clamp(5.0, 50.0);
+    _anomalySensitivity = _race['anomaly_sensitivity'] as String? ?? 'medium';
+    _loadPreferenceDefaults();
+    final openStr  = _race['checkin_open']  as String?;
+    final closeStr = _race['checkin_close'] as String?;
+    if (openStr != null) {
+      final p = openStr.split(':');
+      if (p.length >= 2) {
+        _checkInOpen = TimeOfDay(
+            hour:   int.tryParse(p[0]) ?? 0,
+            minute: int.tryParse(p[1]) ?? 0);
+      }
+    }
+    if (closeStr != null) {
+      final p = closeStr.split(':');
+      if (p.length >= 2) {
+        _checkInClose = TimeOfDay(
+            hour:   int.tryParse(p[0]) ?? 0,
+            minute: int.tryParse(p[1]) ?? 0);
+      }
+    }
+    _refreshRaceStatus();
     _loadRunners();
     _loadCheckpoints();
     _loadStaff();
@@ -99,7 +113,53 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
     super.dispose();
   }
 
+  // ── Preference defaults (fills in values not set on the race object) ─────────
+
+  Future<void> _loadPreferenceDefaults() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    // Only override if the race object didn't supply a value (i.e. we still
+    // hold the hard-coded fallback of 15.0 / 'medium').
+    final hasGps  = (_race['gps_accuracy_threshold'] as num?) != null;
+    final hasSens = (_race['anomaly_sensitivity'] as String?) != null;
+    if (!hasGps || !hasSens) {
+      setState(() {
+        if (!hasGps) {
+          final saved = prefs.getDouble('default_gps_accuracy');
+          if (saved != null) _gpsAccuracy = saved.clamp(5.0, 50.0);
+        }
+        if (!hasSens) {
+          final saved = prefs.getString('default_anomaly_sensitivity');
+          if (saved != null) _anomalySensitivity = saved;
+        }
+      });
+    }
+  }
+
   // ── Data loaders ───────────────────────────────────────────────────────────
+
+  Future<void> _refreshRaceStatus() async {
+    try {
+      final fresh = await ApiService.getRace(_raceId);
+      if (!mounted) return;
+      // If already active, jump straight to live dashboard
+      if (fresh['status'] == 'active') {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => LiveRaceDashboardScreen(race: fresh),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _race['status']      = fresh['status'];
+        _race['walk_in_slots'] = fresh['walk_in_slots'] ?? _race['walk_in_slots'];
+      });
+    } catch (_) {
+      // Non-critical — keep whatever status was passed at navigation time
+    }
+  }
 
   Future<void> _loadRunners() async {
     setState(() { _loadingRunners = true; _runnersError = null; });
@@ -251,6 +311,30 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
     ),
   );
 
+  Future<void> _markAsRaceDay() async {
+  setState(() => _markingRaceDay = true);
+  try {
+    final fresh = await ApiService.getRace(_raceId); // fetch full object
+    fresh['status'] = 'race_day';                    // patch status field
+    await ApiService.updateRaceSettings(_raceId, fresh); // PUT full object
+    if (!mounted) return;
+    await _refreshRaceStatus();
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Failed to mark as race day: $e',
+          style: const TextStyle(
+              color: Colors.black, fontWeight: FontWeight.w600)),
+      backgroundColor: _kAmber,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      margin: const EdgeInsets.all(16),
+    ));
+  } finally {
+    if (mounted) setState(() => _markingRaceDay = false);
+  }
+}
+
   // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
@@ -360,6 +444,37 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
         label: const Text('Start Race'),
         style: ElevatedButton.styleFrom(
           backgroundColor: _kGreen,
+          foregroundColor: Colors.black,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
+      );
+    }
+
+    if (_markingRaceDay) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+        decoration: BoxDecoration(
+          color:        _kAmber.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(10),
+          border:       Border.all(color: _kAmber.withOpacity(0.3)),
+        ),
+        child: const SizedBox(
+          width: 18, height: 18,
+          child: CircularProgressIndicator(strokeWidth: 2, color: _kAmber),
+        ),
+      );
+    }
+
+    if (_raceStatus == 'upcoming') {
+      return ElevatedButton.icon(
+        onPressed: _markAsRaceDay,
+        icon:  const Icon(Icons.flag_rounded, size: 16),
+        label: const Text('Mark as Race Day'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: _kAmber,
           foregroundColor: Colors.black,
           elevation: 0,
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),

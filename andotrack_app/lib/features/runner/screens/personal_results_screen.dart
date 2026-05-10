@@ -74,6 +74,7 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
     }
   }
 
+  // finished_at is a real UTC-aware field — use .toLocal(), not parsePht().
   String _formatFinishTime(String? raw) {
     if (raw == null) return '--:--:--';
     try {
@@ -100,12 +101,14 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
 
   void _share() {
     if (_result == null) return;
-    final rank = _result!['rank'];
-    final pace = _result!['pace_formatted'] ?? '--';
-    final dist = _result!['distance_km']?.toStringAsFixed(2) ?? '--';
+    final rank    = _result!['rank'];
+    final pace    = _result!['pace_formatted'] ?? '--';
+    final dist    = _result!['distance_km']?.toStringAsFixed(2) ?? '--';
+    final segment = _result!['segment']?.toString();
+    final segText = segment != null ? ' | Segment: ${segment[0].toUpperCase()}${segment.substring(1)}' : '';
     final text =
         '🏅 I finished ${widget.raceName}!\n'
-        'Rank: #$rank | Pace: $pace | Distance: ${dist}km\n'
+        'Rank: #$rank | Pace: $pace | Distance: ${dist}km$segText\n'
         '#AndoTrack #Running';
     Clipboard.setData(ClipboardData(text: text));
     ScaffoldMessenger.of(context).showSnackBar(
@@ -161,12 +164,13 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
   }
 
   Widget _buildContent() {
-    final result = _result;
-    final rank = result?['rank'] as int?;
-    final distKm = (result?['distance_km'] as num?)?.toDouble();
+    final result       = _result;
+    final rank         = result?['rank'] as int?;
+    final distKm       = (result?['distance_km'] as num?)?.toDouble();
     final paceFormatted = result?['pace_formatted'] as String?;
-    final finishedAt = result?['finished_at'] as String?;
-    final splits = (result?['splits'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final finishedAt   = result?['finished_at'] as String?;
+    final segment      = result?['segment'] as String?;
+    final splits       = (result?['splits'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
     return CustomScrollView(
       slivers: [
@@ -184,7 +188,6 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
             ),
             child: Column(
               children: [
-                // Trophy icon
                 Container(
                   width: 76,
                   height: 76,
@@ -265,7 +268,16 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
           ),
         ),
 
-        // ── Stats row (rank, percentile, pace, distance) ──────
+        // ── Segment badge ─────────────────────────────────────
+        if (segment != null)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              child: _SegmentBadge(segment: segment),
+            ),
+          ),
+
+        // ── Stats row (rank, pace, distance) ──────────────────
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
@@ -326,14 +338,14 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
                 ),
                 child: Column(
                   children: List.generate(splits.length, (i) {
-                    final split = splits[i];
-                    final name = split['checkpoint_name'] ?? 'Checkpoint ${i + 1}';
+                    final split   = splits[i];
+                    final name    = split['checkpoint_name'] ?? 'Checkpoint ${i + 1}';
                     final passedAt = split['passed_at'] as String?;
-                    final isLast = i == splits.length - 1;
+                    final isLast  = i == splits.length - 1;
                     return _SplitRow(
                       number: i + 1,
-                      name: name,
-                      time: _formatFinishTime(passedAt),
+                      name:   name,
+                      time:   _formatFinishTime(passedAt),
                       isLast: isLast,
                     );
                   }),
@@ -438,11 +450,73 @@ class _PersonalResultsScreenState extends State<PersonalResultsScreen>
   }
 }
 
+// ── Segment badge ─────────────────────────────────────────────────────────────
+
+class _SegmentBadge extends StatelessWidget {
+  final String segment;
+  const _SegmentBadge({required this.segment});
+
+  static Color _color(String s) {
+    switch (s) {
+      case 'competitive':  return const Color(0xFFFFB800);
+      case 'recreational': return const Color(0xFF009688);
+      case 'casual':       return const Color(0xFF8888AA);
+      default:             return const Color(0xFF3A3A55);
+    }
+  }
+
+  static String _label(String s) {
+    switch (s) {
+      case 'competitive':  return '🏆 Competitive Runner — Top 20%';
+      case 'recreational': return '🏃 Recreational Runner — Middle 50%';
+      case 'casual':       return '🚶 Casual Runner — Bottom 30%';
+      default:             return s;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color(segment);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 20),
+      decoration: BoxDecoration(
+        color:        color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border:       Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Column(
+        children: [
+          Text(
+            'YOUR SEGMENT',
+            style: TextStyle(
+              color:         color.withOpacity(0.7),
+              fontSize:      9,
+              fontWeight:    FontWeight.w800,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _label(segment),
+            style: TextStyle(
+              color:      color,
+              fontSize:   15,
+              fontWeight: FontWeight.w700,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Stat card ─────────────────────────────────────────────────────────────────
 class _StatCard extends StatelessWidget {
   final String label;
   final String value;
-  final bool accent;
+  final bool   accent;
   const _StatCard({required this.label, required this.value, this.accent = false});
 
   @override
@@ -488,10 +562,10 @@ class _StatCard extends StatelessWidget {
 
 // ── Split row ─────────────────────────────────────────────────────────────────
 class _SplitRow extends StatelessWidget {
-  final int number;
+  final int    number;
   final String name;
   final String time;
-  final bool isLast;
+  final bool   isLast;
   const _SplitRow({
     required this.number,
     required this.name,

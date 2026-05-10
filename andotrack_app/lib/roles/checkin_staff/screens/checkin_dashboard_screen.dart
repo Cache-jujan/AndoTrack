@@ -13,6 +13,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 
 // ── State enum ────────────────────────────────────────────────────────────────
 
@@ -115,8 +116,14 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
         ?? widget.raceData['date']
         ?? widget.raceData['race_date'];
     if (iso == null) return null;
+    final raw = iso.toString();
     try {
-      return DateTime.parse(iso.toString()).toLocal();
+      final parsed = parsePht(raw);
+      debugPrint('[CheckinDashboard] _parseOpensAt:'
+          '  raw="$raw"'
+          '  parsed=$parsed'
+          '  now=${DateTime.now()}');
+      return parsed;
     } catch (_) {
       return null;
     }
@@ -135,7 +142,13 @@ class _CheckinDashboardScreenState extends State<CheckinDashboardScreen> {
 
   void _updateCountdown() {
     if (_opensAt == null) return;
-    final remaining = _opensAt!.difference(DateTime.now());
+    final now       = DateTime.now();
+    final remaining = _opensAt!.difference(now);
+    debugPrint('[CheckinDashboard] _updateCountdown:'
+        '  opensAt=$_opensAt'
+        '  now=$now'
+        '  remaining=${remaining.inSeconds}s'
+        '  isNegative=${remaining.isNegative}');
     if (remaining.isNegative) {
       _countdownTimer?.cancel();
       _statusPollTimer?.cancel();

@@ -3,10 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
-import 'package:andotrack_app/features/runner/screens/qr_screen.dart';
 import 'package:andotrack_app/features/runner/screens/race_registration_screen.dart';
 import 'package:andotrack_app/features/runner/screens/runner_qr_scanner_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
+
+/// Strips any UTC timezone suffix Pydantic v2 appends to naive PHT datetimes
+/// (e.g. "+00:00" or "Z") before parsing, so Dart treats the literal time
+/// as local PHT rather than interpreting it as UTC and shifting by +8 hours.
+DateTime _parsePht(String raw) {
+  final clean = raw.split('+').first.replaceAll(RegExp(r'[Zz]$'), '');
+  return DateTime.parse(clean);
+}
 
 class RaceDetailScreen extends StatefulWidget {
   final Map<String, dynamic> race;
@@ -63,8 +71,14 @@ class _RaceDetailScreenState extends State<RaceDetailScreen>
 
   void _updateRemaining(String raw) {
     try {
-      final dt = DateTime.parse(raw);
-      final diff = dt.difference(DateTime.now());
+      final now  = DateTime.now();
+      final dt   = _parsePht(raw);
+      final diff = dt.difference(now);
+      debugPrint('[RaceDetail] _updateRemaining:'
+          '  raw="$raw"'
+          '  parsed=$dt'
+          '  now=$now'
+          '  remainingSecs=${diff.inSeconds}');
       setState(() => _remaining = diff.isNegative ? null : diff);
     } catch (_) {}
   }
@@ -140,9 +154,21 @@ class _RaceDetailScreenState extends State<RaceDetailScreen>
   String _formatTime(String? raw) {
     if (raw == null) return '';
     try {
-      final dt = DateTime.parse(raw).toLocal();
-      final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-      final m = dt.minute.toString().padLeft(2, '0');
+      // Happy path: genuine UTC timestamp (checked_in_at, claimed_at) —
+      // suffix present → convert UTC to local PHT via .toLocal().
+      // Fallback: if the backend ever returns this field without a suffix
+      // (naive datetime), treat the literal value as PHT to avoid a −8
+      // hour display error in the opposite direction.
+      final DateTime dt;
+      if (hasTimezoneSuffix(raw)) {
+        dt = DateTime.parse(raw).toLocal();
+      } else {
+        debugPrint('[RaceDetail] _formatTime: no TZ suffix in "$raw"'
+            ' — falling back to parsePht (treating as local PHT)');
+        dt = parsePht(raw);
+      }
+      final h    = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final m    = dt.minute.toString().padLeft(2, '0');
       final ampm = dt.hour < 12 ? 'AM' : 'PM';
       return '$h:$m $ampm';
     } catch (_) {
@@ -464,38 +490,6 @@ class _RaceDetailScreenState extends State<RaceDetailScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // View QR button (if registered)
-                  if (_isRegistered && _registrationData != null) ...[
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => QrScreen(
-                                registrationData: _registrationData!,
-                                raceName:
-                                    race['name']?.toString() ?? 'Race',
-                              ),
-                            ),
-                          );
-                        },
-                        icon: const Icon(Icons.qr_code_2_rounded, size: 18),
-                        label: const Text('View QR Code'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF888890),
-                          side: BorderSide(
-                              color: Colors.white.withOpacity(0.12)),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                  ],
-
                   // Primary CTA
                   if (isActive && _isRegistered)
                     SizedBox(

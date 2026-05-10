@@ -70,6 +70,15 @@ def get_races(
     return [_race_to_response(r, db) for r in races]
 
 
+@router.get("/public", response_model=list[RaceResponse])
+def get_public_races(db: Session = Depends(get_db)):
+    """Public race browser — no auth required. Returns upcoming and open races."""
+    races = db.query(Race).filter(
+        Race.status.in_(["upcoming", "registration_open", "active"])
+    ).order_by(Race.scheduled_start.asc()).all()
+    return [_race_to_response(r, db) for r in races]
+
+
 @router.get("/{race_id}", response_model=RaceResponse)
 def get_race(
     race_id: int,
@@ -153,6 +162,11 @@ def start_race(
         raise HTTPException(status_code=400, detail="Race is already finished.")
 
     race.status = "active"
+    # Auto-transition checked-in runners to 'racing' so live dashboard count is non-zero.
+    db.query(RaceRunner).filter(
+        RaceRunner.race_id == race_id,
+        RaceRunner.is_present == True,
+    ).update({"race_status": "racing"})
     db.commit()
     db.refresh(race)
     return {"message": f"Race '{race.name}' has started!", "status": race.status}
@@ -974,6 +988,38 @@ def deactivate_staff(
         "message":  "Staff deactivated.",
         "staff_id": staff_id,
         "is_active": False,
+    }
+
+
+@router.patch("/{race_id}/staff/{staff_id}/reset-password")
+def reset_staff_password(
+    race_id: int,
+    staff_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") not in ("organizer", "race_director"):
+        raise HTTPException(status_code=403, detail="Only organizers can reset staff passwords.")
+
+    assignment = db.query(StaffAssignment).filter(
+        StaffAssignment.race_id == race_id,
+        StaffAssignment.user_id == staff_id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Staff assignment not found.")
+
+    staff = db.query(User).filter(User.id == staff_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff user not found.")
+
+    new_pw = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+    staff.password = hash_password(new_pw)
+    db.commit()
+
+    return {
+        "staff_id":      staff.id,
+        "name":          staff.name,
+        "temp_password": new_pw,
     }
 
 
