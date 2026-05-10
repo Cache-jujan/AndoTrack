@@ -28,7 +28,8 @@ from schemas.race import (
     CheckInResponse,
 )
 from utils.qr_generator import generate_registration_qr
-
+from utils.segmentation import assign_segments, compute_analytics
+from utils.qr_generator import generate_registration_qr, token_to_base64_png
 router = APIRouter()
 
 
@@ -482,16 +483,34 @@ def finish_race(
     if existing:
         raise HTTPException(status_code=400, detail="Results are already saved for this race")
     
-
     standings = get_all_runners_distance(race_id)
+    print(f"DEBUG finish_race: race_id={race_id}, standings count={len(standings)}")
+    # ── Fallback: if GPS tracker is empty (server restart / no pings received)
+    # use all checked-in runners from DB so finish always succeeds.
+    if not standings:
+        checked_in = db.query(RaceRunner).filter(
+            RaceRunner.race_id == race_id,
+            RaceRunner.is_present == True,
+        ).all()
+        standings = [
+            {
+                "runner_id":          str(rr.runner_id),
+                "distance_metres":    0.0,
+                "distance_km":        0.0,
+                "distance_formatted": "0 m",
+                "gps_points_recorded": 0,
+            }
+            for rr in checked_in
+        ]
 
     now = datetime.datetime.now(datetime.timezone.utc)
     saved = []
+    result_objects = []
 
     for rank, entry in enumerate(standings, start=1):
         runner_id = int(entry["runner_id"])
         pace_data = get_runner_pace_summary(str(runner_id))
-        
+            
         result = RaceResult(
             race_id = race_id,
             runner_id = runner_id,
@@ -502,7 +521,8 @@ def finish_race(
             pace_formatted = pace_data.get("pace_formatted"),
             finished_at = now,
         )
-        db.add(result)
+            
+        result_objects.append(result)
 
         #Look up runner name for the response
         runner = db.query(User).filter(User.id == runner_id).first()
@@ -517,6 +537,12 @@ def finish_race(
             "pace_formatted": pace_data.get("pace_formatted"),
             "finished_at": now.isoformat(),
         })
+
+    # ── NEW: assign segments before commit ──
+    assign_segments(result_objects)
+    for r in result_objects:
+        db.add(r)
+    # ── END NEW ──
     race.status = "finished"
     db.commit()
 
@@ -576,6 +602,7 @@ def get_race_results(
             "pace_min_per_km": row.pace_min_per_km,
             "pace_formatted": row.pace_formatted or "-",
             "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            "segment":            row.segment,
         })
 
     return {
@@ -585,6 +612,110 @@ def get_race_results(
         "total": len(results),
         "results": results,
     }
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+@router.get("/{race_id}/analytics")
+def get_race_analytics(
+    race_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can view race analytics.")
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+    if race.status != "finished":
+        raise HTTPException(status_code=400, detail="Analytics available after race is finished.")
+
+    results      = db.query(RaceResult).filter(RaceResult.race_id == race_id).all()
+    race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail="No results found. Call POST /races/{race_id}/finish first."
+        )
+
+    analytics = compute_analytics(results, race_runners, race)
+
+    anomalies = db.query(Anomaly).filter(Anomaly.race_id == race_id).all()
+    by_type   = {}
+    for a in anomalies:
+        by_type[a.reason] = by_type.get(a.reason, 0) + 1
+
+    analytics["anomaly_summary"] = {
+        "total_detected": len(anomalies),
+        "resolved":       sum(1 for a in anomalies if a.resolved),
+        "unresolved":     sum(1 for a in anomalies if not a.resolved),
+        "by_type":        by_type,
+    }
+
+    return analytics
+
+
+@router.get("/{race_id}/analytics/export")
+def export_segment(
+    race_id: int,
+    segment: str = "all",
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") != "organizer":
+        raise HTTPException(status_code=403, detail="Only organizers can view race analytics.")
+
+    valid_segments = {"competitive", "recreational", "casual", "all"}
+    if segment not in valid_segments:
+        raise HTTPException(
+            status_code=422,
+            detail="segment must be one of: competitive, recreational, casual, all"
+        )
+
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+    if race.status != "finished":
+        raise HTTPException(status_code=400, detail="Analytics available after race is finished.")
+
+    query = db.query(RaceResult).filter(RaceResult.race_id == race_id)
+    if segment != "all":
+        query = query.filter(RaceResult.segment == segment)
+    rows = query.order_by(RaceResult.rank).all()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail="No results found. Call POST /races/{race_id}/finish first."
+        )
+
+    runners_out = []
+    for row in rows:
+        user_obj = db.query(User).filter(User.id == row.runner_id).first()
+        rr       = db.query(RaceRunner).filter(
+            RaceRunner.race_id   == race_id,
+            RaceRunner.runner_id == row.runner_id,
+        ).first()
+        runners_out.append({
+            "rank":           row.rank,
+            "bib_number":     rr.bib_number if rr else None,
+            "name":           user_obj.name if user_obj else f"Runner #{row.runner_id}",
+            "email":          user_obj.email if user_obj else None,
+            "contact_number": rr.contact_number if rr else None,
+            "pace_formatted": row.pace_formatted or "-",
+            "distance_km":    row.distance_km,
+            "finished_at":    row.finished_at.isoformat() if row.finished_at else None,
+            "segment":        row.segment,
+        })
+
+    return {
+        "race_id":  race_id,
+        "segment":  segment,
+        "count":    len(runners_out),
+        "runners":  runners_out,
+    }
+
 
 #Runner Self-stats
 @router.get("/{race_id}/runner/{runner_id}/stats")
@@ -672,16 +803,18 @@ def get_runner_stats(
  
 def _calculate_rank(race_id: int, runner_id: int, my_distance_km: float) -> int | None:
     """
-    Pulls all distances from the in-memory distance_store and counts
-    how many runners are ahead of this one. Returns 1 if leading.
+    Counts how many runners in the same race have covered more distance.
+    Uses get_all_runners_distance() — the same source as the leaderboard.
+    Returns 1 if this runner is leading, None if no data at all.
     """
     try:
-        from utils.distance_tracker import distance_store
- 
+        all_distances = get_all_runners_distance(race_id)
+        if not all_distances:
+            return None
         rank = 1
-        for (r_id, u_id), dist_meters in distance_store.items():
-            if r_id == race_id and u_id != runner_id:
-                if (dist_meters / 1000) > my_distance_km:
+        for entry in all_distances:
+            if int(entry["runner_id"]) != runner_id:
+                if entry["distance_km"] > my_distance_km:
                     rank += 1
         return rank
     except Exception:

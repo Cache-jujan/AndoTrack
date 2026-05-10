@@ -20,13 +20,14 @@ from utils.distance_tracker import (
     reset_runner,
     reset_race,
     get_last_position,
+    get_distance,
 )
 from utils.qr_generator import token_to_base64_png
 from models.race import RaceRunner
 from ml.anomaly_detector import run_anomaly_detection
 from ml.feature_extraction import extract_features
 from routes.anomaly_handler import save_and_push_anomaly
-
+from utils.qr_generator import token_to_base64_png
 # ── Load ML model once at startup ────────────────────────────────────────────
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "..","ml", "anomaly_model.pkl")
 _anomaly_model = None
@@ -338,7 +339,6 @@ def finish_race(
         raise HTTPException(status_code=400, detail="Result already recorded for this runner")
  
     # Get distance and pace from in-memory stores
-    from utils.distance_tracker import get_distance
     from utils.pace import get_pace_min_per_km, format_pace
     import datetime
  

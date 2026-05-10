@@ -147,40 +147,15 @@ def _format_distance(metres: float) -> str:
         return f"{metres:.0f} m"
     return f"{metres / 1000:.2f} km"
 
-distance_store: dict[tuple[int, int], float] = defaultdict(float)
- 
-# Tracks the last known position per (race_id, runner_id)
-_last_position: dict[tuple[int, int], tuple[float, float]] = {}
- 
-JITTER_FILTER_METERS = 1  # ignore GPS pings that moved less than 1m
- 
- 
-def record_position(race_id: int, runner_id: int, lat: float, lng: float) -> float:
-    """
-    Updates cumulative distance for this runner in this race.
-    Applies a 1-metre jitter filter to ignore GPS noise.
-    Returns the total distance in metres.
-    """
-    key = (race_id, runner_id)
- 
-    if key in _last_position:
-        prev_lat, prev_lng = _last_position[key]
-        delta = haversine(prev_lat, prev_lng, lat, lng)
-        if delta > JITTER_FILTER_METERS:
-            distance_store[key] += delta
-            _last_position[key] = (lat, lng)
-    else:
-        # First ping — store position but don't add distance yet
-        _last_position[key] = (lat, lng)
- 
-    return distance_store[key]
- 
- 
 def get_distance(race_id: int, runner_id: int) -> float | None:
     """
-    Returns cumulative distance in metres, or None if no data yet.
+    Returns cumulative distance in metres for a runner, or None if no GPS
+    data has been recorded yet.
+
+    runner_id is cast to str internally because record_position() stores
+    data under str keys (runners.py passes str(runner_id) on every ping).
     """
-    key = (race_id, runner_id)
-    if key not in _last_position:
+    state = _tracker.get((race_id, str(runner_id)))
+    if state is None:
         return None
-    return distance_store[key]
+    return state.total_metres
