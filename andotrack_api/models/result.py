@@ -13,4 +13,5 @@ class RaceResult(Base):
     distance_km = Column(Float, default=0.0)
     pace_min_per_km = Column(Float, nullable=True) #None if runner never moved
     pace_formatted = Column(String(20), nullable=True) #for final pace eg. "5:42/km"
+    segment = Column(String(20), nullable=True)  # 'competitive' | 'recreational' | 'casual' | None
     finished_at = Column(DateTime, default=datetime.datetime.utcnow)
