@@ -4,7 +4,7 @@ from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+load_dotenv(override=False)  # Railway's env vars take priority
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
