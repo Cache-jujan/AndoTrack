@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:andotrack_app/core/services/location_service.dart';
 import 'package:andotrack_app/core/services/firebase_service.dart';
 
 class MapScreen extends StatefulWidget {

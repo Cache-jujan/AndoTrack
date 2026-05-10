@@ -204,31 +204,33 @@ class ApiService {
 
   // ── Races ─────────────────────────────────────────────────────────────────
 
-  static Future<List<Map<String, dynamic>>> getRaces() async {
-    final headers = await _authHeaders();
-    final res = await http.get(
-      Uri.parse('$_base/races/'),
-      headers: headers,
-    );
-    if (res.statusCode == 200) {
-      final list = jsonDecode(res.body) as List;
-      return list.cast<Map<String, dynamic>>();
-    }
-    throw Exception('Failed to load races (${res.statusCode})');
+  // Returns ALL races — keep plural
+static Future<List<Map<String, dynamic>>> getRaces() async {
+  final headers = await _authHeaders();
+  final res = await http.get(
+    Uri.parse('$_base/races/'),
+    headers: headers,
+  );
+  if (res.statusCode == 200) {
+    final list = jsonDecode(res.body) as List;
+    return list.cast<Map<String, dynamic>>();
   }
+  throw Exception('Failed to load races (${res.statusCode})');
+}
 
-  static Future<Map<String, dynamic>> getRace(int raceId) async {
-    final headers = await _authHeaders();
-    final res = await http.get(
-      Uri.parse('$_base/races/$raceId'),
-      headers: headers,
-    );
-    if (res.statusCode == 200) {
-      return jsonDecode(res.body) as Map<String, dynamic>;
-    }
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    throw Exception(body['detail'] ?? 'Failed to load race');
+// Returns ONE race by ID — singular
+static Future<Map<String, dynamic>> getRace(int raceId) async {
+  final headers = await _authHeaders();
+  final res = await http.get(
+    Uri.parse('$_base/races/$raceId'),
+    headers: headers,
+  );
+  if (res.statusCode == 200) {
+    return jsonDecode(res.body) as Map<String, dynamic>;
   }
+  final body = jsonDecode(res.body) as Map<String, dynamic>;
+  throw Exception(body['detail'] ?? 'Failed to load race');
+}
 
   static Future<void> createRace(Map<String, dynamic> payload) async {
     final headers = await _authHeaders();
@@ -471,17 +473,7 @@ class ApiService {
 
   // ── Staff accounts ────────────────────────────────────────────────────────
 
-  static Future<Map<String, dynamic>> getRace(int raceId) async {
-    final headers = await _authHeaders();
-    final res = await http.get(
-      Uri.parse('$_base/races/$raceId'),
-      headers: headers,
-    );
-    if (res.statusCode == 200) {
-      return jsonDecode(res.body) as Map<String, dynamic>;
-    }
-    throw ApiException('Could not load race.');
-  }
+
 
   static Future<List<Map<String, dynamic>>> getPublicRaces() async {
     final res = await http.get(Uri.parse('$_base/races/public'));
