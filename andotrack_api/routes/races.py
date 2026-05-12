@@ -1,6 +1,6 @@
 from models.result import RaceResult
 from utils.pace import get_runner_pace_summary
-from utils.distance_tracker import get_all_runners_distance, get_last_position
+from utils.distance_tracker import get_all_runners_distance, get_last_position, get_distance_km
 from utils.auth import hash_password
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -1198,4 +1198,45 @@ def simulate_payment(
         "bib_number": registration.bib_number,
         "shirt_size": registration.shirt_size,
         "race_status": registration.race_status,
+    }
+
+
+# ── Public runner positions ───────────────────────────────────────────────────
+
+@router.get("/{race_id}/public-positions")
+def get_public_runner_positions(
+    race_id: int,
+    db: Session = Depends(get_db),
+):
+    """Public endpoint — no auth. Returns live GPS positions for runners in an active race."""
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    if race.status != "active":
+        return {"race_id": race_id, "status": race.status, "runners": []}
+
+    race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+
+    runners_out = []
+    for rr in race_runners:
+        pos = get_last_position(race_id, str(rr.runner_id))
+        if pos is None:
+            continue
+        lat, lng = pos
+        dist_km = get_distance_km(race_id, str(rr.runner_id))
+        runners_out.append({
+            "runner_id":   rr.runner_id,
+            "bib_number":  getattr(rr, "bib_number", None),
+            "lat":         lat,
+            "lng":         lng,
+            "distance_km": dist_km,
+        })
+
+    return {
+        "race_id":        race_id,
+        "race_name":      race.name,
+        "status":         race.status,
+        "total_with_gps": len(runners_out),
+        "runners":        runners_out,
     }
