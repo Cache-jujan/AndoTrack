@@ -239,16 +239,7 @@ class _KitTopBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Logo mark
-          Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(
-              color: _kGreen.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kGreen.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.directions_run_rounded, color: _kGreen, size: 16),
-          ),
+          Image.asset('assets/images/favicon.png', width: 30, height: 30),
           const SizedBox(width: 10),
           const Text(
             'AndoTrack',

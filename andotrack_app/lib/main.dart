@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +7,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/core/services/notification_service.dart';
 import 'package:andotrack_app/features/auth/screens/login_screen.dart';
+import 'package:andotrack_app/features/race/screens/public_race_dashboard.dart';
 import 'package:andotrack_app/roles/race_director/shell/race_director_shell.dart';
 import 'package:andotrack_app/roles/checkin_staff/shell/checkin_staff_shell.dart';
 import 'package:andotrack_app/roles/kit_staff/shell/kit_staff_shell.dart';
@@ -172,6 +174,6 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return const LoginScreen();
+    return kIsWeb ? const PublicRaceDashboard() : const LoginScreen();
   }
 }

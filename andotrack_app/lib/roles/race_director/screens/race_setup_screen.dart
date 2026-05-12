@@ -9,6 +9,13 @@ import 'package:andotrack_app/features/checkpoint/services/checkpoint_service.da
 import 'package:andotrack_app/roles/race_director/screens/checkpoint_placement_screen.dart';
 import 'package:andotrack_app/roles/race_director/screens/live_race_dashboard_screen.dart';
 
+// ── Philippine time helper ────────────────────────────────────────────────────
+// Available for any future clock-time display added to this screen.
+// _fmtTime and _TimePickerField use TimeOfDay (user-input PHT), not UTC
+// DateTime, so _toPhilippineTime() does not apply to them.
+DateTime _toPhilippineTime(DateTime utc) =>
+    utc.add(const Duration(hours: 8));
+
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const _kBg        = Color(0xFF080810);
 const _kSurface   = Color(0xFF0D0D18);
@@ -806,9 +813,7 @@ class _RaceSetupScreenState extends State<RaceSetupScreen>
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-          subdomains: const ['a', 'b', 'c', 'd'],
-          userAgentPackageName: 'com.andotrack.app',
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         ),
         CircleLayer(
           circles: ordered.map((cp) => CircleMarker(

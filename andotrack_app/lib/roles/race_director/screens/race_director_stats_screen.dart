@@ -471,9 +471,9 @@ class _RaceStats extends StatelessWidget {
     final compSeg   = segments['competitive']  as Map<String, dynamic>? ?? {};
     final recSeg    = segments['recreational'] as Map<String, dynamic>? ?? {};
     final casSeg    = segments['casual']       as Map<String, dynamic>? ?? {};
-    final compCount = (compSeg['count'] as int?) ?? 0;
-    final recCount  = (recSeg['count']  as int?) ?? 0;
-    final casCount  = (casSeg['count']  as int?) ?? 0;
+    final compCount = (compSeg['count'] as num?)?.toInt() ?? 0;
+    final recCount  = (recSeg['count']  as num?)?.toInt() ?? 0;
+    final casCount  = (casSeg['count']  as num?)?.toInt() ?? 0;
     final segTotal  = compCount + recCount + casCount;
 
     final anomTotal = (anomaly['total_detected'] as int?) ?? 0;

@@ -24,6 +24,11 @@ const _kTextPri   = Colors.white;
 const _kTextSub   = Color(0xFF8888AA);
 const _kTextMuted = Color(0xFF3A3A55);
 
+// ── Philippine time helper ────────────────────────────────────────────────────
+
+DateTime _toPhilippineTime(DateTime utc) =>
+    utc.add(const Duration(hours: 8));
+
 // ── Segment helpers ───────────────────────────────────────────────────────────
 
 Color _segmentColor(String? segment) {
@@ -666,12 +671,12 @@ class _LeaderboardRow extends StatelessWidget {
     final name = entry['name']?.toString()
         ?? entry['runner_name']?.toString() ?? 'Unknown';
 
-    // finished_at is a real UTC-aware field — parse with .toLocal(), not parsePht().
+    // finished_at is a UTC field — display in PHT (UTC+8).
     final finishedAtRaw = entry['finished_at']?.toString();
     String time = '—';
     if (finishedAtRaw != null) {
       try {
-        final dt = DateTime.parse(finishedAtRaw).toLocal();
+        final dt = _toPhilippineTime(DateTime.parse(finishedAtRaw));
         time = '${dt.hour.toString().padLeft(2, '0')}:'
             '${dt.minute.toString().padLeft(2, '0')}:'
             '${dt.second.toString().padLeft(2, '0')}';
@@ -927,7 +932,7 @@ class _AnalyticsTabState extends State<_AnalyticsTab> {
     for (var i = 0; i < keys.length; i++) {
       final key  = keys[i];
       final seg  = segments[key] as Map<String, dynamic>? ?? {};
-      final count = seg['count'] as int? ?? 0;
+      final count = (seg['count'] as num?)?.toInt() ?? 0;
       final pace  = seg['avg_pace_formatted']?.toString() ?? '—';
       final color = _segmentColor(key);
       if (i > 0) cards.add(const SizedBox(width: 10));
@@ -1165,12 +1170,12 @@ class _ExportRunnerRow extends StatelessWidget {
     final segment = runner['segment']?.toString();
     final segColor = _segmentColor(segment);
 
-    // finished_at is real UTC — use .toLocal().
+    // finished_at is a UTC field — display in PHT (UTC+8).
     final finishedAtRaw = runner['finished_at']?.toString();
     String finishedTime = '—';
     if (finishedAtRaw != null) {
       try {
-        final dt = DateTime.parse(finishedAtRaw).toLocal();
+        final dt = _toPhilippineTime(DateTime.parse(finishedAtRaw));
         finishedTime =
             '${dt.hour.toString().padLeft(2, '0')}:'
             '${dt.minute.toString().padLeft(2, '0')}:'

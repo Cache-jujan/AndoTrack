@@ -252,17 +252,9 @@ class _Sidebar extends StatelessWidget {
                 ? Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
+                      Image.asset(
+                        'assets/images/favicon.png',
                         width: 32, height: 32,
-                        decoration: BoxDecoration(
-                          color:        _kGreen.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(9),
-                          border:       Border.all(
-                              color: _kGreen.withOpacity(0.3)),
-                        ),
-                        child: const Icon(
-                            Icons.directions_run_rounded,
-                            color: _kGreen, size: 17),
                       ),
                       const SizedBox(width: 10),
                       const Text(

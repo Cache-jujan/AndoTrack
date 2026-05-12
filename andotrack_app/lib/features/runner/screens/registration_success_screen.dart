@@ -189,7 +189,7 @@ class RegistrationSuccessScreen extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                           builder: (_) => RaceDetailScreen(race: race)),
-                      (_) => false,
+                      (route) => route.isFirst,
                     );
                   },
                   style: ElevatedButton.styleFrom(

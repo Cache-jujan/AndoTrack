@@ -144,7 +144,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: Column(
                   children: [
                     Image.asset(
-                      'android/favicon.png',
+                      'assets/images/favicon.png',
                       width:  80,
                       height: 80,
                     ),

@@ -11,17 +11,6 @@ import 'package:andotrack_app/roles/checkin_staff/shell/checkin_staff_shell.dart
 import 'package:andotrack_app/roles/kit_staff/shell/kit_staff_shell.dart';
 import 'package:andotrack_app/roles/runner_app/runner_dashboard_screen.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared login screen — works on both web (staff/director) and Android (runner).
-//
-// Platform split is handled AFTER login via _routeByRole():
-//   • Web  → RaceDirectorShell / CheckinStaffShell (TODO) / KitStaffShell (TODO)
-//   • Mobile → RunnerDashboardScreen
-//
-// Layout split via kIsWeb:
-//   • Web  → dark, centered card (440 px max-width)
-//   • Mobile → white, full-screen (original runner UX, untouched)
-// ─────────────────────────────────────────────────────────────────────────────
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -198,7 +187,7 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             children: [
               Image.asset(
-                'android/favicon.png',
+                'assets/images/favicon.png',
                 width:  80,
                 height: 80,
               ),

@@ -94,7 +94,7 @@ class _CheckpointPlacementScreenState extends State<CheckpointPlacementScreen>
   static const _defaultCenter = LatLng(10.3157, 123.8854);
   // CartoDB Positron — clean light tiles, same as all other RD screens
   static const _tileUrl =
-      'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+      'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   static const _photon    = 'https://photon.komoot.io/api';
   static const _nominatim = 'https://nominatim.openstreetmap.org';
 
@@ -1115,8 +1115,6 @@ class _CheckpointPlacementScreenState extends State<CheckpointPlacementScreen>
       children: [
         TileLayer(
           urlTemplate: _tileUrl,
-          subdomains: const ['a', 'b', 'c', 'd'],
-          userAgentPackageName: 'com.andotrack.app',
         ),
 
         if (polyline.length >= 2)

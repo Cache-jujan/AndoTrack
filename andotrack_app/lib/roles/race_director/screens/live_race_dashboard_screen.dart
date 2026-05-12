@@ -20,6 +20,13 @@ const _kTextMuted = Color(0xFF3A3A55);
 
 const _kTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
+// ── Philippine time helper ────────────────────────────────────────────────────
+// Available for any future clock-time display added to this screen.
+// Do NOT apply to _raceStartedAt: that value feeds a Duration calculation, not
+// a displayed timestamp, so PHT conversion belongs at the display layer only.
+DateTime _toPhilippineTime(DateTime utc) =>
+    utc.add(const Duration(hours: 8));
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 class LiveRaceDashboardScreen extends StatefulWidget {
@@ -517,8 +524,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
       ),
       children: [
         TileLayer(
-          urlTemplate:          _kTileUrl,
-          userAgentPackageName: 'com.andotrack.app',
+          urlTemplate: _kTileUrl,
         ),
         if (cpCircles.isNotEmpty)
           CircleLayer(circles: cpCircles),
