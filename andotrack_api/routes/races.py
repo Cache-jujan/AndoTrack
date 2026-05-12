@@ -510,7 +510,23 @@ def get_anomalies(
         query = query.filter(Anomaly.runner_id == runner_id)
     if resolved is not None:
         query = query.filter(Anomaly.resolved == resolved)
-    return query.all()
+    anomalies = query.order_by(Anomaly.detected_at.desc()).all()
+    result = []
+    for a in anomalies:
+        runner = db.query(User).filter(User.id == a.runner_id).first()
+        result.append({
+            "id":           a.id,
+            "race_id":      a.race_id,
+            "runner_id":    a.runner_id,
+            "runner_name":  runner.name if runner else f"Runner #{a.runner_id}",
+            "reason":       a.reason,
+            "score":        a.score,
+            "lat":          a.lat,
+            "lng":          a.lng,
+            "detected_at":  a.detected_at,
+            "resolved":     a.resolved,
+        })
+    return result
 
 @router.patch("/{race_id}/anomalies/{anomaly_id}/resolve")
 def resolve_anomaly(

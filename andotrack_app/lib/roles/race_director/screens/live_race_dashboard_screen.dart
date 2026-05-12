@@ -712,8 +712,7 @@ class _AnomalyCard extends StatelessWidget {
     switch (type) {
       case 'vehicle_speed': return 'VEHICLE SPEED';
       case 'gps_jump':      return 'GPS JUMP';
-      case 'off_route':     return 'OFF ROUTE';
-      case 'erratic':       return 'ERRATIC MOVEMENT';
+      case 'location_off':  return 'LOCATION OFF';
       default:              return type.toUpperCase().replaceAll('_', ' ');
     }
   }
@@ -730,13 +729,11 @@ class _AnomalyCard extends StatelessWidget {
     IconData icon;
     switch (type) {
       case 'vehicle_speed':
-        color = _kRed;   icon = Icons.speed_rounded;         break;
+        color = _kRed;   icon = Icons.speed_rounded;          break;
       case 'gps_jump':
         color = _kAmber; icon = Icons.gps_off_rounded;        break;
-      case 'off_route':
-        color = _kAmber; icon = Icons.route_rounded;          break;
-      case 'erratic':
-        color = _kRed;   icon = Icons.warning_rounded;        break;
+      case 'location_off':
+        color = _kAmber; icon = Icons.location_off_rounded;   break;
       default:
         color = _kAmber; icon = Icons.warning_amber_rounded;
     }
@@ -767,6 +764,16 @@ class _AnomalyCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            anomaly['runner_name']?.toString()
+                ?? 'Runner #${anomaly['runner_id']}',
+            style: const TextStyle(
+              color:      _kTextPri,
+              fontSize:   11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
