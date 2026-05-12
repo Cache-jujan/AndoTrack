@@ -70,13 +70,28 @@ def get_races(
     return [_race_to_response(r, db) for r in races]
 
 
-@router.get("/public", response_model=list[RaceResponse])
+@router.get("/public")
 def get_public_races(db: Session = Depends(get_db)):
-    """Public race browser — no auth required. Returns upcoming and open races."""
-    races = db.query(Race).filter(
-        Race.status.in_(["upcoming", "registration_open", "active"])
-    ).order_by(Race.scheduled_start.asc()).all()
-    return [_race_to_response(r, db) for r in races]
+    """Public endpoint — no auth. Returns only currently active races as plain dicts."""
+    races = db.query(Race).filter(Race.status == "active").all()
+    result = []
+    for race in races:
+        count = db.query(func.count(RaceRunner.id)).filter(
+            RaceRunner.race_id == race.id
+        ).scalar() or 0
+        result.append({
+            "id":                race.id,
+            "name":              race.name,
+            "distance_km":       race.distance_km,
+            "category":          race.category,
+            "status":            race.status,
+            "location":          race.location,
+            "scheduled_start":   race.scheduled_start,
+            "participant_count": count,
+            "max_participants":  race.max_participants,
+            "banner_url":        race.banner_url,
+        })
+    return result
 
 
 @router.get("/{race_id}", response_model=RaceResponse)
