@@ -1,7 +1,7 @@
 def determine_reason(features: list[float]) -> str:
     speed, acceleration, direction_change, dist_from_route, dist_from_last = features
 
-    if speed > 10:
+    if speed > 4.5:
         return "Vehicle speed detected"
     if dist_from_last > 200:
         return "GPS jump detected"

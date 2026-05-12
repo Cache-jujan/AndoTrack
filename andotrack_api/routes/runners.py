@@ -15,6 +15,7 @@ from database import get_db
 from utils.dependencies import get_current_user
 from utils.pace import record_speed, get_runner_pace_summary, get_pace_min_per_km, format_pace
 from utils.distance_tracker import (
+    _tracker,
     record_position,
     get_distance_summary,
     get_all_runners_distance,
@@ -77,11 +78,18 @@ def update_location(
     record_speed(runner_key, body.speed)
     pace = get_runner_pace_summary(runner_key)
 
-    # Get previous position BEFORE updating
+    # Get previous position and speed BEFORE updating
     prev = get_last_position(body.race_id, runner_key)
+    old_state = _tracker.get((body.race_id, runner_key))
+    old_speed = old_state.prev_speed if old_state else 0.0
 
     delta    = record_position(body.race_id, runner_key, body.lat, body.lng)
     distance = get_distance_summary(body.race_id, runner_key)
+
+    # Store current speed as prev_speed for next ping
+    new_state = _tracker.get((body.race_id, runner_key))
+    if new_state is not None:
+        new_state.prev_speed = body.speed
 
     # ── Anomaly detection ─────────────────────────────────────────────────
     anomaly_result = None
@@ -93,7 +101,7 @@ def update_location(
             current_speed=body.speed,
             prev_lat=prev_lat,
             prev_lng=prev_lng,
-            prev_speed=body.speed,
+            prev_speed=old_speed,
             route_lat=body.lat,
             route_lng=body.lng,
             time_delta=5.0,
