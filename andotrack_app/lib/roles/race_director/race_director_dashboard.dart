@@ -11,6 +11,7 @@ import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/core/services/routing_service.dart';
 import 'package:andotrack_app/features/checkin/screens/organizer_qr_scanner_screen.dart';
 import 'package:andotrack_app/roles/race_director/screens/checkpoint_placement_screen.dart';
+import 'package:andotrack_app/roles/race_director/screens/post_race_screen.dart';
 import 'package:andotrack_app/features/leaderboard/screens/leaderboard_screen.dart';
 import 'package:andotrack_app/features/race/screens/races_screen.dart';
 import 'package:andotrack_app/features/runner/screens/settings_screen.dart';
@@ -313,9 +314,27 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
     setState(() => _actionLoading = true);
     try {
       if (isActive) {
-        await ApiService.stopRace(_raceId!);
-        setState(() => _raceStatus = 'finished');
+        try {
+          await ApiService.stopRace(_raceId!);
+        } catch (e) {
+          // "already finished" means the script already ended the race — treat as success
+          final msg = e.toString().toLowerCase();
+          if (!msg.contains('finish') && !msg.contains('already')) rethrow;
+        }
         _elapsedTimer?.cancel();
+        setState(() => _raceStatus = 'finished');
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PostRaceScreen(race: {
+                'id':     _raceId,
+                'name':   _raceName ?? 'Race #$_raceId',
+                'status': 'finished',
+              }),
+            ),
+          );
+        }
       } else {
         await ApiService.startRace(_raceId!);
         setState(() => _raceStatus = 'active');
