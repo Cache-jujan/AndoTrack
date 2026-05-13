@@ -602,10 +602,7 @@ class _CheckpointPlacementScreenState extends State<CheckpointPlacementScreen>
 
   // ── Map events ────────────────────────────────────────────────────────────
   void _onMapEvent(MapEvent event) {
-    if (event is MapEventMove || event is MapEventMoveEnd ||
-        event is MapEventScrollWheelZoom || event is MapEventDoubleTapZoom) {
-      if (mounted) setState(() => _crosshair = _mapController.camera.center);
-    }
+    if (mounted) setState(() => _crosshair = _mapController.camera.center);
   }
 
   // ── Snack ─────────────────────────────────────────────────────────────────
@@ -1213,7 +1210,7 @@ class _CheckpointPlacementScreenState extends State<CheckpointPlacementScreen>
               point: LatLng(
                   (cp['lat'] as num).toDouble(), (cp['lng'] as num).toDouble()),
               width: 68, height: 56,
-              alignment: Alignment.center,
+              alignment: const Alignment(0.0, -0.464), 
               child: MouseRegion(
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(

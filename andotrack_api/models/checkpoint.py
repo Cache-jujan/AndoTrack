@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, UniqueConstraint
+from sqlalchemy import Column, Double, Integer, String, Float, DateTime, UniqueConstraint
 import datetime
 from database import Base
 
@@ -7,8 +7,8 @@ class Checkpoint(Base):
     id = Column(Integer, primary_key=True, index=True)
     race_id = Column(Integer)
     name = Column(String(100))
-    lat = Column(Float)
-    lng = Column(Float)
+    lat = Column(Double)
+    lng = Column(Double)
     radius_meters = Column(Integer, default=20)
     order_number = Column(Integer)
     type = Column(String(20), default="timing")  # timing, aid_station, km_marker
