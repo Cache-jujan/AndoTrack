@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-      static const String _base = 'https://andotrack-production.up.railway.app';  
+      static const String _base = 'https://andotrack-production.up.railway.app';
   // ── Auth ──────────────────────────────────────────────────────────────────
 
   static Future<Map<String, dynamic>> login(
@@ -16,15 +16,15 @@ class ApiService {
         Uri.parse('$_base/auth/login'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'email': email, 'password': password}),
-      );
+      ).timeout(const Duration(seconds: 20));
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       if (res.statusCode == 200) {
         return {
           'success': true,
-          'token': body['access_token'],
-          'role': body['role'],
+          'token':   body['access_token'],
+          'role':    body['role'],
           'user_id': body['user_id'],
-          'name': body['name'],
+          'name':    body['name'],
         };
       }
       return {
@@ -80,7 +80,7 @@ class ApiService {
   required String email,
   required bool isFirstMarathon,
   required String sex,
-  required String shirtSize, 
+  required String shirtSize,
   }) async {
     final headers = await _authHeaders();
     final res = await http.post(
@@ -278,13 +278,19 @@ class ApiService {
       );
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        // Backend may return {"leaderboard": [...]} or directly [...]
+        // Backend returns directly as a list (live leaderboard endpoint)
         if (decoded is List) {
           return decoded.cast<Map<String, dynamic>>();
         }
+        // Backend returns {"finished": [...], "racing": [...], ...}
         if (decoded is Map<String, dynamic>) {
-          final list = decoded['leaderboard'] as List? ?? [];
-          return list.cast<Map<String, dynamic>>();
+          final finished =
+              (decoded['finished'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          if (finished.isNotEmpty) return finished;
+          // Fall back to still-racing entries (live race context)
+          final racing =
+              (decoded['racing'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          return racing;
         }
       }
       return [];
@@ -310,38 +316,88 @@ class ApiService {
   static Future<List<Map<String, dynamic>>> getRaceRunners(int raceId) async {
     final headers = await _authHeaders();
     final url = '$_base/races/$raceId/runners';
-    debugPrint('[API] GET $url');
     final res = await http.get(Uri.parse(url), headers: headers);
-    debugPrint('[API] GET $url → ${res.statusCode}');
-    debugPrint('[API] Body (first 500): ${res.body.substring(0, res.body.length.clamp(0, 500))}');
     if (res.statusCode == 200) {
       try {
         final decoded = jsonDecode(res.body);
         if (decoded is List) {
-          debugPrint('[API] Parsed as List — ${decoded.length} runners');
           return decoded.cast<Map<String, dynamic>>();
         }
         if (decoded is Map<String, dynamic>) {
           final list = decoded['runners'] as List? ??
               decoded['registrations'] as List? ??
               decoded['data'] as List? ?? [];
-          debugPrint('[API] Parsed as Map — key runners/registrations/data — ${list.length} items');
           return list.cast<Map<String, dynamic>>();
         }
-        debugPrint('[API] WARNING: Unexpected response shape: ${decoded.runtimeType}');
         return [];
       } catch (e) {
         debugPrint('[API] PARSE ERROR on getRaceRunners: $e');
-        debugPrint('[API] Raw body: ${res.body}');
         return [];
       }
     }
-    if (res.statusCode == 404) {
-      debugPrint('[API] 404 on $url — treating as empty list');
+    if (res.statusCode == 404) return [];
+    throw Exception('Failed to load runners (${res.statusCode})');
+  }
+
+  // ── Public endpoints (no Authorization header) ───────────────────────────
+
+  static Future<List<Map<String, dynamic>>> getPublicRaces() async {
+    final res = await http.get(
+      Uri.parse('$_base/races/public'),
+      headers: {'Content-Type': 'application/json'},
+    );
+    if (res.statusCode == 200) {
+      final list = jsonDecode(res.body) as List;
+      return list.cast<Map<String, dynamic>>();
+    }
+    throw Exception('Failed to load races (${res.statusCode})');
+  }
+
+  static Future<List<Map<String, dynamic>>> getPublicRaceRunners(
+      int raceId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/races/$raceId/runners'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded is List) return decoded.cast<Map<String, dynamic>>();
+        if (decoded is Map<String, dynamic>) {
+          final list = decoded['runners'] as List?
+              ?? decoded['registrations'] as List?
+              ?? decoded['data'] as List? ?? [];
+          return list.cast<Map<String, dynamic>>();
+        }
+      }
+      return [];
+    } catch (_) {
       return [];
     }
-    debugPrint('[API] ERROR ${res.statusCode} on $url — body: ${res.body}');
-    throw Exception('Failed to load runners (${res.statusCode}): ${res.body}');
+  }
+
+  static Future<List<Map<String, dynamic>>> getPublicLeaderboard(
+      int raceId) async {
+    try {
+      final res = await http.get(
+        Uri.parse('$_base/leaderboard/$raceId'),
+        headers: {'Content-Type': 'application/json'},
+      );
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        if (decoded is List) return decoded.cast<Map<String, dynamic>>();
+        if (decoded is Map<String, dynamic>) {
+          final finished =
+              (decoded['finished'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+          if (finished.isNotEmpty) return finished;
+          return (decoded['racing'] as List?)
+                  ?.cast<Map<String, dynamic>>() ?? [];
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
   }
 
   // ── Profile ───────────────────────────────────────────────────────────────
@@ -387,10 +443,14 @@ class ApiService {
     int runnerId,
   ) async {
     final headers = await _authHeaders();
-    await http.post(
+    final res = await http.post(
       Uri.parse('$_base/checkpoints/$checkpointId/arrive?runner_id=$runnerId'),
       headers: headers,
     );
+    if (res.statusCode != 200 && res.statusCode != 201) {
+      throw Exception(
+          'Checkpoint arrive failed (${res.statusCode}): ${res.body}');
+    }
   }
 
   static Future<void> deleteCheckpoint(int checkpointId) async {
@@ -491,16 +551,18 @@ class ApiService {
     required String role,
   }) async {
     final headers = await _authHeaders();
-    final res = await http.post(
-      Uri.parse('$_base/races/$raceId/staff'),
-      headers: headers,
-      body: jsonEncode({'name': name, 'email': email, 'role': role}),
+    final uri = Uri.parse('$_base/races/$raceId/staff').replace(
+      queryParameters: {'name': name, 'email': email, 'role': role},
     );
+    final res = await http.post(uri, headers: headers);
     if (res.statusCode == 200 || res.statusCode == 201) {
       return jsonDecode(res.body) as Map<String, dynamic>;
     }
     final body = jsonDecode(res.body) as Map<String, dynamic>;
-    throw ApiException(body['detail'] ?? 'Failed to create staff account.');
+    final detail = body['detail'];
+    throw ApiException(
+      detail is String ? detail : 'Failed to create staff account.',
+    );
   }
 
   static Future<void> deactivateStaffAccount(int raceId, int staffId) async {
@@ -513,6 +575,20 @@ class ApiService {
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       throw ApiException(body['detail'] ?? 'Failed to deactivate staff.');
     }
+  }
+
+  static Future<Map<String, dynamic>> resetStaffPassword(
+      int raceId, int staffId) async {
+    final headers = await _authHeaders();
+    final res = await http.patch(
+      Uri.parse('$_base/races/$raceId/staff/$staffId/reset-password'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    throw ApiException(body['detail'] ?? 'Failed to reset password.');
   }
 
   // ── Anomalies ─────────────────────────────────────────────────────────────
@@ -563,12 +639,45 @@ class ApiService {
     throw ApiException('Could not load anomaly report.');
   }
 
+  // ── Analytics ─────────────────────────────────────────────────────────────
+
+  /// Returns the full analytics payload for a finished race.
+  /// Requires organizer role. Only available after race is finished.
+  static Future<Map<String, dynamic>> getAnalytics(int raceId) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/races/$raceId/analytics'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Could not load analytics (${res.statusCode}).');
+  }
+
+  /// Returns segment-filtered runner list.
+  /// [segment] must be one of: 'all', 'competitive', 'recreational', 'casual'.
+  static Future<Map<String, dynamic>> exportSegment(
+    int raceId,
+    String segment,
+  ) async {
+    final headers = await _authHeaders();
+    final res = await http.get(
+      Uri.parse('$_base/races/$raceId/analytics/export?segment=$segment'),
+      headers: headers,
+    );
+    if (res.statusCode == 200) {
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    }
+    throw ApiException('Could not export segment (${res.statusCode}).');
+  }
+
   // ── Race settings ─────────────────────────────────────────────────────────
 
   static Future<void> updateRaceSettings(
       int raceId, Map<String, dynamic> settings) async {
     final headers = await _authHeaders();
-    await http.patch(
+    await http.put(
       Uri.parse('$_base/races/$raceId'),
       headers: headers,
       body: jsonEncode(settings),

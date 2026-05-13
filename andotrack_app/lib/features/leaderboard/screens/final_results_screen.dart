@@ -43,8 +43,6 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
 
   Future<void> _load() async {
     try {
-      // FIX 2: getLeaderboard returns List<Map<String,dynamic>> directly,
-      // not a Map with a 'leaderboard' key — use it directly.
       final leaderboard = await ApiService.getLeaderboard(widget.raceId);
       if (mounted) {
         setState(() {
@@ -63,18 +61,17 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
     }
   }
 
-  String _formatSpeed(dynamic raw) {
-    final mps = (raw as num?)?.toDouble() ?? 0.0;
-    return '${(mps * 3.6).toStringAsFixed(1)} km/h';
-  }
-
-  String _formatPace(dynamic raw) {
-    final mps = (raw as num?)?.toDouble() ?? 0.0;
-    if (mps <= 0) return '--:--';
-    final spk = 1000 / mps;
-    final m = (spk ~/ 60).toString().padLeft(2, '0');
-    final s = (spk % 60).toInt().toString().padLeft(2, '0');
-    return '$m:$s /km';
+  // finished_at is a real UTC-aware field — use .toLocal(), not parsePht().
+  String _parseFinishTime(String? raw) {
+    if (raw == null) return '--:--:--';
+    try {
+      final dt = DateTime.parse(raw).toLocal();
+      return '${dt.hour.toString().padLeft(2, '0')}:'
+          '${dt.minute.toString().padLeft(2, '0')}:'
+          '${dt.second.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '--:--:--';
+    }
   }
 
   @override
@@ -116,7 +113,7 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
                       onPressed: () {
                         setState(() {
                           _loading = true;
-                          _error = null;
+                          _error   = null;
                         });
                         _load();
                       },
@@ -141,7 +138,10 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
       expandedHeight: 120,
       backgroundColor: const Color(0xFF0A0A0F),
       pinned: true,
-      automaticallyImplyLeading: widget.isOrganizer,
+      leading: BackButton(
+        color: const Color(0xFF888899),
+        onPressed: () => Navigator.pop(context),
+      ),
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
           decoration: const BoxDecoration(
@@ -213,7 +213,7 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
         delegate: SliverChildBuilderDelegate(
           (context, i) {
             final entry = _results[i];
-            final rank = i + 1;
+            final rank  = i + 1;
             final delay = Duration(milliseconds: 80 * i);
 
             return FutureBuilder(
@@ -223,10 +223,13 @@ class _FinalResultsScreenState extends State<FinalResultsScreen>
                   return const SizedBox.shrink();
                 }
                 return _ResultRow(
-                  rank: rank,
-                  runnerId: entry['runner_id']?.toString() ?? '?',
-                  speed: _formatSpeed(entry['speed']),
-                  pace: _formatPace(entry['speed']),
+                  rank:       rank,
+                  name:       entry['name']?.toString()
+                      ?? 'Runner #${entry['runner_id'] ?? '?'}',
+                  pace:       entry['pace_formatted']?.toString() ?? '--:--',
+                  finishTime: _parseFinishTime(
+                      entry['finished_at']?.toString()),
+                  segment:    entry['segment']?.toString(),
                 );
               },
             );
@@ -265,7 +268,8 @@ class _PodiumBlock extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          'Runner #${entry['runner_id'] ?? '?'}',
+          entry['name']?.toString()
+              ?? 'Runner #${entry['runner_id'] ?? '?'}',
           style: TextStyle(
             color: color,
             fontSize: 11,
@@ -301,17 +305,37 @@ class _PodiumBlock extends StatelessWidget {
 
 // ─── RESULT ROW ────────────────────────────────────────────────────────────
 class _ResultRow extends StatelessWidget {
-  final int rank;
-  final String runnerId;
-  final String speed;
-  final String pace;
+  final int     rank;
+  final String  name;
+  final String  pace;
+  final String  finishTime;
+  final String? segment;
 
   const _ResultRow({
     required this.rank,
-    required this.runnerId,
-    required this.speed,
+    required this.name,
     required this.pace,
+    required this.finishTime,
+    this.segment,
   });
+
+  static Color _segmentColor(String s) {
+    switch (s) {
+      case 'competitive':  return const Color(0xFFFFB800);
+      case 'recreational': return const Color(0xFF009688);
+      case 'casual':       return const Color(0xFF8888AA);
+      default:             return const Color(0xFF3A3A55);
+    }
+  }
+
+  static String _segmentLabel(String s) {
+    switch (s) {
+      case 'competitive':  return 'COMP';
+      case 'recreational': return 'REC';
+      case 'casual':       return 'CAS';
+      default:             return s.toUpperCase();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -320,7 +344,7 @@ class _ResultRow extends StatelessWidget {
         ? [
             const Color(0xFFFFD700),
             const Color(0xFFC0C0C0),
-            const Color(0xFFCD7F32)
+            const Color(0xFFCD7F32),
           ][rank - 1]
         : const Color(0xFF444460);
 
@@ -346,8 +370,8 @@ class _ResultRow extends StatelessWidget {
             child: Text(
               '#$rank',
               style: TextStyle(
-                color: rankColor,
-                fontSize: 14,
+                color:      rankColor,
+                fontSize:   14,
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -356,23 +380,45 @@ class _ResultRow extends StatelessWidget {
           Expanded(
             flex: 3,
             child: Text(
-              'Runner #$runnerId',
+              name,
               style: TextStyle(
-                color: isTop3 ? Colors.white : const Color(0xFFCCCCDD),
-                fontSize: 13,
-                fontWeight:
-                    isTop3 ? FontWeight.bold : FontWeight.normal,
+                color:      isTop3 ? Colors.white : const Color(0xFFCCCCDD),
+                fontSize:   13,
+                fontWeight: isTop3 ? FontWeight.bold : FontWeight.normal,
               ),
+              overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (segment != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color:        _segmentColor(segment!).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(4),
+                border:       Border.all(
+                    color: _segmentColor(segment!).withOpacity(0.3)),
+              ),
+              child: Text(
+                _segmentLabel(segment!),
+                style: TextStyle(
+                  color:         _segmentColor(segment!),
+                  fontSize:      9,
+                  fontWeight:    FontWeight.w800,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 8),
           Expanded(
             flex: 2,
             child: Text(
-              speed,
+              finishTime,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: isTop3 ? rankColor : const Color(0xFF888899),
-                fontSize: 12,
+                color:      isTop3 ? rankColor : const Color(0xFF888899),
+                fontSize:   12,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -383,7 +429,7 @@ class _ResultRow extends StatelessWidget {
               pace,
               textAlign: TextAlign.center,
               style: const TextStyle(
-                color: Color(0xFF666680),
+                color:    Color(0xFF666680),
                 fontSize: 11,
               ),
             ),

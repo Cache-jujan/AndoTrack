@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 import 'package:andotrack_app/features/auth/screens/login_screen.dart';
 import 'package:andotrack_app/roles/kit_staff/screens/kit_dashboard_screen.dart';
 
@@ -238,16 +239,7 @@ class _KitTopBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Logo mark
-          Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(
-              color: _kGreen.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kGreen.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.directions_run_rounded, color: _kGreen, size: 16),
-          ),
+          Image.asset('assets/images/favicon.png', width: 30, height: 30),
           const SizedBox(width: 10),
           const Text(
             'AndoTrack',
@@ -416,7 +408,7 @@ class _KitRaceCardState extends State<_KitRaceCard> {
   static String _formatDate(dynamic iso) {
     if (iso == null) return 'Date TBD';
     try {
-      final dt = DateTime.parse(iso.toString()).toLocal();
+      final dt = parsePht(iso.toString());
       const months = ['Jan','Feb','Mar','Apr','May','Jun',
                       'Jul','Aug','Sep','Oct','Nov','Dec'];
       final h = dt.hour.toString().padLeft(2, '0');
@@ -720,6 +712,7 @@ class _LogoutDialog extends StatelessWidget {
   static const _kBorder  = Color(0xFF1E1E32);
   static const _kTextPri = Colors.white;
   static const _kTextSub = Color(0xFF8888AA);
+  static const _kRed     = Color(0xFFFF4D4D);
 
   const _LogoutDialog();
 
@@ -728,60 +721,73 @@ class _LogoutDialog extends StatelessWidget {
     return Dialog(
       backgroundColor: _kSurface,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: _kBorder),
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: _kBorder, width: 1),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Log Out',
-              style: TextStyle(color: _kTextPri, fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Are you sure you want to log out?',
-              style: TextStyle(color: _kTextSub, fontSize: 13),
-            ),
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.pop(context, false),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: _kTextSub,
-                      side: const BorderSide(color: _kBorder),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text('Cancel'),
-                  ),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 40),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Log out?',
+                style: TextStyle(
+                  color: _kTextPri,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context, true),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF4D4D),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                    child: const Text(
-                      'Log Out',
-                      style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'You will need to sign in again.',
+                style: TextStyle(color: _kTextSub, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _kTextSub,
+                        side: const BorderSide(color: _kBorder, width: 1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _kRed,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
+                      child: const Text(
+                        'Log Out',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );

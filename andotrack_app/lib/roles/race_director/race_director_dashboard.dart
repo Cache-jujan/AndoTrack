@@ -11,6 +11,7 @@ import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/core/services/routing_service.dart';
 import 'package:andotrack_app/features/checkin/screens/organizer_qr_scanner_screen.dart';
 import 'package:andotrack_app/roles/race_director/screens/checkpoint_placement_screen.dart';
+import 'package:andotrack_app/roles/race_director/screens/post_race_screen.dart';
 import 'package:andotrack_app/features/leaderboard/screens/leaderboard_screen.dart';
 import 'package:andotrack_app/features/race/screens/races_screen.dart';
 import 'package:andotrack_app/features/runner/screens/settings_screen.dart';
@@ -313,9 +314,27 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
     setState(() => _actionLoading = true);
     try {
       if (isActive) {
-        await ApiService.stopRace(_raceId!);
-        setState(() => _raceStatus = 'finished');
+        try {
+          await ApiService.stopRace(_raceId!);
+        } catch (e) {
+          // "already finished" means the script already ended the race — treat as success
+          final msg = e.toString().toLowerCase();
+          if (!msg.contains('finish') && !msg.contains('already')) rethrow;
+        }
         _elapsedTimer?.cancel();
+        setState(() => _raceStatus = 'finished');
+        if (mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => PostRaceScreen(race: {
+                'id':     _raceId,
+                'name':   _raceName ?? 'Race #$_raceId',
+                'status': 'finished',
+              }),
+            ),
+          );
+        }
       } else {
         await ApiService.startRace(_raceId!);
         setState(() => _raceStatus = 'active');
@@ -543,9 +562,7 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
       ),
       children: [
         TileLayer(
-          urlTemplate:
-              'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-          subdomains: const ['a', 'b', 'c', 'd'],
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
         ),
 
         if (_routePolyline.length >= 2)
@@ -558,7 +575,8 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
           ]),
 
         CircleLayer(
-          circles: _checkpoints.map((cp) => CircleMarker(
+          // Reversed so lower-order checkpoints render on top at shared coords
+          circles: _checkpoints.reversed.map((cp) => CircleMarker(
             point: LatLng(
               (cp['lat'] as num).toDouble(),
               (cp['lng'] as num).toDouble(),
@@ -572,17 +590,20 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
         ),
 
         MarkerLayer(markers: [
-          // Checkpoint pins
-          ..._checkpoints.asMap().entries.map((e) => Marker(
-            point: LatLng(
-              (e.value['lat'] as num).toDouble(),
-              (e.value['lng'] as num).toDouble(),
-            ),
-            width: 56, height: 60,
-            child: _CheckpointPin(
-                index: e.key + 1,
-                name:  e.value['name']?.toString() ?? ''),
-          )),
+          // Checkpoint pins — reversed so CP1 renders on top of CP5 at shared coords
+          ..._checkpoints.reversed.toList().asMap().entries.map((e) {
+            final order = _checkpoints.length - e.key; // CP1=1, CP2=2 …
+            return Marker(
+              point: LatLng(
+                (e.value['lat'] as num).toDouble(),
+                (e.value['lng'] as num).toDouble(),
+              ),
+              width: 56, height: 60,
+              child: _CheckpointPin(
+                  index: order,
+                  name:  e.value['name']?.toString() ?? ''),
+            );
+          }),
 
           // Runner dots (smoothed)
           ..._smoothPositions.entries.map((e) {

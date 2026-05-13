@@ -1,18 +1,9 @@
-// lib/roles/race_director/screens/live_race_dashboard_screen.dart
-//
-// WEB-ONLY live race command center for Race Director.
-// Layout: TopBar / Row(AnomalySidebar 280px | Stack(FlutterMap, RunnerPanel))
-// Two timers: _clockTimer (1 s elapsed tick), _pollTimer (10 s data refresh)
-//
-// Field names confirmed from CheckpointService / backend:
-//   Checkpoint: lat, lng, order_number, radius_meters, name, id
-//   Anomaly:    reason (not description), detected_at, resolved
-
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 import 'package:andotrack_app/roles/race_director/screens/post_race_screen.dart';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -27,9 +18,14 @@ const _kTextPri   = Colors.white;
 const _kTextSub   = Color(0xFF8888AA);
 const _kTextMuted = Color(0xFF3A3A55);
 
-// CartoDB Positron — clean light tiles, consistent across all map screens
-const _kTileUrl      = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
-const _kTileSubdomains = ['a', 'b', 'c', 'd'];
+const _kTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+// ── Philippine time helper ────────────────────────────────────────────────────
+// Available for any future clock-time display added to this screen.
+// Do NOT apply to _raceStartedAt: that value feeds a Duration calculation, not
+// a displayed timestamp, so PHT conversion belongs at the display layer only.
+DateTime _toPhilippineTime(DateTime utc) =>
+    utc.add(const Duration(hours: 8));
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -51,6 +47,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   // ── UI state ──────────────────────────────────────────────────────────────
   bool    _bottomExpanded = true;
   bool    _stoppingRace   = false;
+  bool    _mapCentered    = false;
   String? _pollError;
 
   // ── Map ───────────────────────────────────────────────────────────────────
@@ -60,8 +57,9 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   Timer?   _clockTimer;
   Timer?   _pollTimer;
   Duration _elapsed = Duration.zero;
+  DateTime? _raceStartedAt;  // ← Store parsed start time to preserve across screen re-entries
 
-  int get _raceId => widget.race['id'] as int;
+  int get _raceId => (widget.race['id'] as num).toInt();
 
   @override
   void initState() {
@@ -86,12 +84,42 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   }
 
   void _initElapsed() {
-    final raw = widget.race['started_at']?.toString();
-    if (raw == null) return;
-    try {
-      final d = DateTime.now().difference(DateTime.parse(raw).toLocal());
+    // If we already have a stored start time from a previous init, use it
+    if (_raceStartedAt != null) {
+      final d = DateTime.now().difference(_raceStartedAt!);
       _elapsed = d.isNegative ? Duration.zero : d;
-    } catch (_) {}
+      return;
+    }
+
+    // Try to get started_at from widget.race first
+    final raw = widget.race['started_at']?.toString();
+    if (raw != null) {
+      try {
+        _raceStartedAt = parsePht(raw);
+        final d = DateTime.now().difference(_raceStartedAt!);
+        _elapsed = d.isNegative ? Duration.zero : d;
+        return;
+      } catch (_) {}
+    }
+
+    // If started_at is missing or parse failed, fetch fresh race data from backend
+    _fetchRaceStartTime();
+  }
+
+  Future<void> _fetchRaceStartTime() async {
+    try {
+      final race = await ApiService.getRace(_raceId);
+      final raw = race['started_at']?.toString();
+      if (raw != null) {
+        _raceStartedAt = parsePht(raw);
+        final d = DateTime.now().difference(_raceStartedAt!);
+        if (mounted) {
+          setState(() => _elapsed = d.isNegative ? Duration.zero : d);
+        }
+      }
+    } catch (e) {
+      debugPrint('[LiveRace] Failed to fetch race start time: $e');
+    }
   }
 
   // ── Polling ───────────────────────────────────────────────────────────────
@@ -113,6 +141,12 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
             .toList();
         _pollError = null;
       });
+      // Move map to course centroid on first successful checkpoint load.
+      // Guard with _mapCentered so subsequent polls don't fight user panning.
+      if (!_mapCentered && _checkpoints.isNotEmpty) {
+        _mapCentered = true;
+        _mapCtrl.move(_mapCenter, 13);
+      }
     } catch (e) {
       if (mounted) setState(() => _pollError = e.toString());
     }
@@ -128,9 +162,13 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   }
 
   int get _racingCount =>
-      _runners.where((r) => r['status']?.toString() == 'racing').length;
+      _runners.where((r) => r['is_present'] == true).length;
   int get _dnsCount    =>
-      _runners.where((r) => r['status']?.toString() == 'dns').length;
+      _runners.where((r) => r['race_status']?.toString() == 'dns').length;
+
+  // Only checked-in runners (is_present == true) are shown in the bottom panel.
+  List<Map<String, dynamic>> get _checkedInRunners =>
+      _runners.where((r) => r['is_present'] == true).toList();
 
   // Compute map center from checkpoint coordinates (field: lat, lng)
   LatLng get _mapCenter {
@@ -205,23 +243,28 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
     setState(() => _stoppingRace = true);
     try {
       await ApiService.stopRace(_raceId);
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-            builder: (_) => PostRaceScreen(race: widget.race)),
-      );
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _stoppingRace = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Failed to stop race: $e'),
-        backgroundColor: _kRed,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
+      final msg = e.toString().toLowerCase();
+      // "already finished" means the simulation script ended the race — navigate anyway
+      if (!msg.contains('finish') && !msg.contains('already')) {
+        if (!mounted) return;
+        setState(() => _stoppingRace = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to stop race: $e'),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
     }
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => PostRaceScreen(race: widget.race)),
+    );
   }
 
   Future<void> _resolveAnomaly(int anomalyId) async {
@@ -413,11 +456,16 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
           useRadiusInMeter:  true,
         )).toList();
 
-    // Runner GPS dots — runners only appear if backend tracks last_lat/last_lng
+    // Runner GPS dots — location fields not yet included in GET /races/{race_id}/runners
+    // This will populate once backend updates runner response to include last_lat/last_lng
     final runnerCircles = _runners
-        .where((r) => r['last_lat'] != null && r['last_lng'] != null)
+        .where((r) => (r['last_lat'] ?? r['latitude']) != null && (r['last_lng'] ?? r['longitude']) != null)
         .map((r) {
-      final status = r['status']?.toString() ?? 'racing';
+      final lat = (r['last_lat'] ?? r['latitude']) as num?;
+      final lng = (r['last_lng'] ?? r['longitude']) as num?;
+      if (lat == null || lng == null) return null;
+      
+      final status = r['race_status']?.toString() ?? r['status']?.toString() ?? 'racing';
       Color color;
       switch (status) {
         case 'finished': color = _kGreen; break;
@@ -426,15 +474,15 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
       }
       return CircleMarker(
         point: LatLng(
-          (r['last_lat'] as num).toDouble(),
-          (r['last_lng'] as num).toDouble(),
+          lat.toDouble(),
+          lng.toDouble(),
         ),
         radius:            5,
         color:             color.withOpacity(0.9),
         borderColor:       Colors.white.withOpacity(0.5),
         borderStrokeWidth: 1,
       );
-    }).toList();
+    }).whereType<CircleMarker>().toList();
 
     // Checkpoint number markers
     final cpMarkers = List.generate(cpWithCoords.length, (i) {
@@ -481,9 +529,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
       ),
       children: [
         TileLayer(
-          urlTemplate:          _kTileUrl,
-          subdomains:           _kTileSubdomains,
-          userAgentPackageName: 'com.andotrack.app',
+          urlTemplate: _kTileUrl,
         ),
         if (cpCircles.isNotEmpty)
           CircleLayer(circles: cpCircles),
@@ -522,7 +568,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
                       size: 14, color: _kTextSub),
                   const SizedBox(width: 8),
                   Text(
-                    'Runners  (${_runners.length})',
+                    'Checked In  (${_checkedInRunners.length})',
                     style: const TextStyle(
                       color:      _kTextSub,
                       fontSize:   12,
@@ -547,16 +593,21 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
                       child: Text('No runner data yet',
                           style: TextStyle(
                               color: _kTextMuted, fontSize: 12)))
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-                      scrollDirection: Axis.horizontal,
-                      itemCount:       _runners.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (_, i) => _RunnerCard(
-                        runner: _runners[i],
-                        onTap:  () => _showRunnerDetail(_runners[i]),
-                      ),
-                    ),
+                  : _checkedInRunners.isEmpty
+                      ? const Center(
+                          child: Text('No checked-in runners yet',
+                              style: TextStyle(
+                                  color: _kTextMuted, fontSize: 12)))
+                      : ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                          scrollDirection: Axis.horizontal,
+                          itemCount:       _checkedInRunners.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          itemBuilder: (_, i) => _RunnerCard(
+                            runner: _checkedInRunners[i],
+                            onTap:  () => _showRunnerDetail(_checkedInRunners[i]),
+                          ),
+                        ),
             ),
         ],
       ),
@@ -666,8 +717,6 @@ class _AnomalyCard extends StatelessWidget {
     switch (type) {
       case 'vehicle_speed': return 'VEHICLE SPEED';
       case 'gps_jump':      return 'GPS JUMP';
-      case 'off_route':     return 'OFF ROUTE';
-      case 'erratic':       return 'ERRATIC MOVEMENT';
       default:              return type.toUpperCase().replaceAll('_', ' ');
     }
   }
@@ -684,13 +733,11 @@ class _AnomalyCard extends StatelessWidget {
     IconData icon;
     switch (type) {
       case 'vehicle_speed':
-        color = _kRed;   icon = Icons.speed_rounded;         break;
+        color = _kRed;   icon = Icons.speed_rounded;          break;
       case 'gps_jump':
         color = _kAmber; icon = Icons.gps_off_rounded;        break;
-      case 'off_route':
-        color = _kAmber; icon = Icons.route_rounded;          break;
-      case 'erratic':
-        color = _kRed;   icon = Icons.warning_rounded;        break;
+      case 'location_off':
+        color = _kAmber; icon = Icons.location_off_rounded;   break;
       default:
         color = _kAmber; icon = Icons.warning_amber_rounded;
     }
@@ -721,6 +768,16 @@ class _AnomalyCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            anomaly['runner_name']?.toString()
+                ?? 'Runner #${anomaly['runner_id']}',
+            style: const TextStyle(
+              color:      _kTextPri,
+              fontSize:   11,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 4),
           Text(

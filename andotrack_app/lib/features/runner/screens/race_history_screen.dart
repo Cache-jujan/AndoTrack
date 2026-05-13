@@ -28,27 +28,52 @@ class _RaceHistoryScreenState extends State<RaceHistoryScreen> {
   Future<void> _load() async {
     setState(() {
       _loading = true;
-      _error = null;
+      _error   = null;
     });
     try {
       _userId = await ApiService.getUserId();
       final races = await ApiService.getRaces();
-      // Filter to finished races where this user was registered
+
+      // Fetch runner's personal results once, keyed by race_id
+      Map<int, Map<String, dynamic>> resultMap = {};
+      try {
+        final response = await ApiService.getRunnerResults(_userId!);
+        final list = (response['results'] as List?)
+            ?.cast<Map<String, dynamic>>() ?? [];
+        for (final r in list) {
+          final rid = r['race_id'];
+          if (rid != null) resultMap[(rid as num).toInt()] = r;
+        }
+      } catch (_) {}
+
       final finished = <Map<String, dynamic>>[];
       for (final race in races) {
         if (race['status'] != 'finished') continue;
         try {
-          final raceId = race['id'] as int;
+          final raceId  = (race['id'] as num).toInt();
           final runners = await ApiService.getRaceRunners(raceId);
-          final match = runners
+          final match   = runners
               .cast<Map<String, dynamic>>()
               .where((r) => r['user_id'] == _userId);
           if (match.isNotEmpty) {
-            final runner = match.first;
+            final result = resultMap[raceId];
+            String? finishTime;
+            if (result != null && result['finished_at'] != null) {
+              try {
+                // finished_at is a real UTC-aware field — use .toLocal().
+                final dt =
+                    DateTime.parse(result['finished_at'].toString()).toLocal();
+                finishTime =
+                    '${dt.hour.toString().padLeft(2, '0')}:'
+                    '${dt.minute.toString().padLeft(2, '0')}:'
+                    '${dt.second.toString().padLeft(2, '0')}';
+              } catch (_) {}
+            }
             finished.add({
               ...race,
-              '_finish_time': runner['finish_time'],
-              '_rank': runner['rank'],
+              '_finish_time': finishTime,
+              '_rank':        result?['rank'],
+              '_segment':     result?['segment'],
             });
           }
         } catch (_) {}
@@ -62,7 +87,7 @@ class _RaceHistoryScreenState extends State<RaceHistoryScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Failed to load history.';
+          _error   = 'Failed to load history.';
           _loading = false;
         });
       }
@@ -140,7 +165,7 @@ class _RaceHistoryScreenState extends State<RaceHistoryScreen> {
                                     context,
                                     MaterialPageRoute(
                                       builder: (_) => FinalResultsScreen(
-                                        raceId: _history[i]['id'] as int,
+                                        raceId: (_history[i]['id'] as num).toInt(),
                                         raceName: _history[i]['name']
                                             ?.toString(),
                                       ),
@@ -195,12 +220,31 @@ class _HistoryCard extends StatelessWidget {
 
   const _HistoryCard({required this.race, required this.onTap});
 
+  static Color _segmentColor(String s) {
+    switch (s) {
+      case 'competitive':  return const Color(0xFFFFB800);
+      case 'recreational': return const Color(0xFF009688);
+      case 'casual':       return const Color(0xFF8888AA);
+      default:             return const Color(0xFF3A3A55);
+    }
+  }
+
+  static String _segmentLabel(String s) {
+    switch (s) {
+      case 'competitive':  return '🏆 Competitive';
+      case 'recreational': return '🏃 Recreational';
+      case 'casual':       return '🚶 Casual';
+      default:             return s;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final name = race['name']?.toString() ?? 'Race';
-    final distance = race['distance_km'];
-    final scheduled = race['scheduled_start'];
+    final name       = race['name']?.toString() ?? 'Race';
+    final distance   = race['distance_km'];
+    final scheduled  = race['scheduled_start'];
     final finishTime = race['_finish_time']?.toString();
+    final segment    = race['_segment']?.toString();
 
     String? dateLabel;
     if (scheduled != null) {
@@ -322,6 +366,29 @@ class _HistoryCard extends StatelessWidget {
                         ),
                       ),
                     ],
+                  ),
+                ),
+              ],
+
+              // Segment badge
+              if (segment != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _segmentColor(segment).withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: _segmentColor(segment).withOpacity(0.25)),
+                  ),
+                  child: Text(
+                    _segmentLabel(segment),
+                    style: TextStyle(
+                      color:      _segmentColor(segment),
+                      fontSize:   12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],

@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/services/location_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 import 'package:andotrack_app/features/leaderboard/screens/final_results_screen.dart';
 import 'package:andotrack_app/features/map/screens/runner_map_screen.dart';
 import 'package:andotrack_app/features/race/screens/race_detail_screen.dart';
@@ -141,6 +144,54 @@ class _HomeTabState extends State<_HomeTab>
   final Map<int, String> _countdowns = {};
   Timer? _countdownTimer;
 
+  // ── Location tracking ─────────────────────────────────────────────────────
+  StreamSubscription<Position>? _locationSub;
+  int? _trackingRaceId;
+
+  void _startLocationTracking(int raceId, int runnerId) {
+    // Already tracking this race — do nothing
+    if (_trackingRaceId == raceId && _locationSub != null) return;
+
+    _locationSub?.cancel();
+    _trackingRaceId = raceId;
+
+    debugPrint('[LocationTracking] Starting GPS tracking for race=$raceId runner=$runnerId');
+
+    _locationSub = LocationService.getLocationStream().listen(
+      (Position pos) async {
+        try {
+          await ApiService.post(
+            '/runners/$runnerId/location',
+            {
+              'lat':       pos.latitude,
+              'lng':       pos.longitude,
+              'speed':     pos.speed,
+              'accuracy':  pos.accuracy,
+              'race_id':   raceId,
+            },
+          );
+          debugPrint('[LocationTracking] POST /runners/$runnerId/location with lat=${pos.latitude} lng=${pos.longitude}');
+        } catch (e) {
+          debugPrint('[LocationTracking] Failed to send location: $e');
+        }
+      },
+      onError: (e) {
+        debugPrint('[LocationTracking] Stream error: $e');
+      },
+    );
+  }
+
+  void _stopLocationTracking() {
+    if (_locationSub != null) {
+      debugPrint('[LocationTracking] Stopping GPS tracking');
+      _locationSub?.cancel();
+      _locationSub = null;
+      _trackingRaceId = null;
+    }
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
   @override
   void initState() {
     super.initState();
@@ -156,6 +207,7 @@ class _HomeTabState extends State<_HomeTab>
   void dispose() {
     _tabController.dispose();
     _countdownTimer?.cancel();
+    _stopLocationTracking();
     super.dispose();
   }
 
@@ -204,12 +256,17 @@ class _HomeTabState extends State<_HomeTab>
       final scheduled = race['scheduled_start'];
       if (scheduled == null) continue;
       try {
-        final dt = DateTime.parse(scheduled);
+        final dt   = parsePht(scheduled.toString());
         final diff = dt.difference(now);
+        debugPrint('[RunnerDash] countdown raceId=$id'
+            '  raw="$scheduled"'
+            '  parsed=$dt'
+            '  now=$now'
+            '  remainingSecs=${diff.inSeconds}');
         if (diff.isNegative) {
           updated[id] = '';
         } else {
-          final days = diff.inDays;
+          final days  = diff.inDays;
           final hours = diff.inHours % 24;
           if (days > 0) {
             updated[id] = '${days}d ${hours}h';
@@ -241,6 +298,7 @@ class _HomeTabState extends State<_HomeTab>
     await Future.wait(
       relevant.map((race) async {
         final raceId = race['id'] as int;
+        final raceStatus = race['status']?.toString() ?? '';
         try {
           final runners = await ApiService.getRaceRunners(raceId);
           final match = runners
@@ -267,13 +325,32 @@ class _HomeTabState extends State<_HomeTab>
               'qr_image_base64': runner['qr_image_base64'] ?? '',
               'bib_number': bib,
               'shirt_size': shirt,
+              'runner_id': runner['id'] ?? runner['runner_id'] ?? _userId,
             };
+
+            // ── Start GPS tracking if race is active ────────────────────────
+            if (raceStatus == 'active') {
+              final runnerId = (runner['id'] ?? runner['runner_id'] ?? _userId) as int;
+              final hasPermission = await LocationService.requestPermission();
+              if (hasPermission) {
+                _startLocationTracking(raceId, runnerId);
+              } else {
+                debugPrint('[LocationTracking] Permission denied — cannot track');
+              }
+            }
           }
         } catch (_) {
           // Individual race failure is non-fatal — skip silently
         }
       }),
     );
+
+    // Stop tracking if no active race found
+    if (!newRegistrations.values.any((registration) =>
+        relevant.any((r) =>
+            r['id'] == registration['race_id'] && r['status'] == 'active'))) {
+      _stopLocationTracking();
+    }
 
     if (!mounted) return;
     setState(() {
@@ -505,7 +582,7 @@ class _HomeTabState extends State<_HomeTab>
       backgroundColor: const Color(0xFF0D0D14),
       onRefresh: _loadRaces,
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         itemCount: _myRaces.length,
         itemBuilder: (ctx, i) {
           final race = _myRaces[i];
@@ -552,7 +629,7 @@ class _HomeTabState extends State<_HomeTab>
       backgroundColor: const Color(0xFF0D0D14),
       onRefresh: _loadRaces,
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
         itemCount: _browseRaces.length,
         itemBuilder: (ctx, i) {
           final race = _browseRaces[i];
@@ -639,7 +716,7 @@ class _MyRaceCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: const EdgeInsets.only(bottom: 16),
         decoration: BoxDecoration(
           color: const Color(0xFF0D0D14),
           borderRadius: BorderRadius.circular(16),
@@ -905,7 +982,7 @@ class _BrowseRaceCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: const EdgeInsets.only(bottom: 16),
         decoration: BoxDecoration(
           color: const Color(0xFF0D0D14),
           borderRadius: BorderRadius.circular(16),
@@ -933,7 +1010,7 @@ class _BrowseRaceCard extends StatelessWidget {
               ),
 
               if (location.isNotEmpty) ...[
-                const SizedBox(height: 5),
+                const SizedBox(height: 8),
                 Row(children: [
                   const Icon(Icons.place_outlined,
                       size: 12, color: Color(0xFF444460)),
@@ -950,7 +1027,7 @@ class _BrowseRaceCard extends StatelessWidget {
               ],
 
               if (dateLabel.isNotEmpty) ...[
-                const SizedBox(height: 3),
+                const SizedBox(height: 8),
                 Row(children: [
                   const Icon(Icons.calendar_today_outlined,
                       size: 12, color: Color(0xFF444460)),

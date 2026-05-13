@@ -11,17 +11,6 @@ import 'package:andotrack_app/roles/checkin_staff/shell/checkin_staff_shell.dart
 import 'package:andotrack_app/roles/kit_staff/shell/kit_staff_shell.dart';
 import 'package:andotrack_app/roles/runner_app/runner_dashboard_screen.dart';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Shared login screen — works on both web (staff/director) and Android (runner).
-//
-// Platform split is handled AFTER login via _routeByRole():
-//   • Web  → RaceDirectorShell / CheckinStaffShell (TODO) / KitStaffShell (TODO)
-//   • Mobile → RunnerDashboardScreen
-//
-// Layout split via kIsWeb:
-//   • Web  → dark, centered card (440 px max-width)
-//   • Mobile → white, full-screen (original runner UX, untouched)
-// ─────────────────────────────────────────────────────────────────────────────
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -46,7 +35,7 @@ class _LoginScreenState extends State<LoginScreen> {
   // ── Login ──────────────────────────────────────────────────────────────────
 
   Future<void> _login() async {
-    final email    = _emailCtrl.text.trim();
+    final email    = _emailCtrl.text.trim().toLowerCase();
     final password = _passwordCtrl.text.trim();
 
     if (email.isEmpty || password.isEmpty) {
@@ -60,22 +49,24 @@ class _LoginScreenState extends State<LoginScreen> {
       final result = await ApiService.login(email, password);
 
       if (result['success'] == true) {
-        final token = result['token'] as String;
-        final role  = result['role']  as String;
+        final token  = result['token']?.toString() ?? '';
+        final role   = result['role']?.toString() ?? 'runner';
+        final userId = (result['user_id'] as num?)?.toInt() ?? 0;
+        final name   = result['name']?.toString() ?? '';
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('jwt_token',  token);
         await prefs.setString('user_role',  role);
-        await prefs.setInt('user_id',       result['user_id'] as int);
-        await prefs.setString('user_name',  result['name']    as String);
+        await prefs.setInt('user_id',       userId);
+        await prefs.setString('user_name',  name);
 
         if (!mounted) return;
         _routeByRole(role);
       } else {
         setState(() => _errorMessage = result['message'] ?? 'Login failed.');
       }
-    } catch (_) {
-      setState(() => _errorMessage = 'Connection error. Please check your network.');
+    } catch (e) {
+      setState(() => _errorMessage = 'Login error: $e');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -163,12 +154,15 @@ class _LoginScreenState extends State<LoginScreen> {
   // White background, full-screen — original runner login UX, fully preserved.
 
   Widget _mobileScaffold() {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
-          child: _buildForm(isDark: false),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF0A0A0F),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 48),
+            child: _buildForm(isDark: true),
+          ),
         ),
       ),
     );
@@ -192,16 +186,10 @@ class _LoginScreenState extends State<LoginScreen> {
         Center(
           child: Column(
             children: [
-              Container(
-                width: 68, height: 68,
-                decoration: BoxDecoration(
-                  color:        accentColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(18),
-                  border:       Border.all(
-                      color: accentColor.withOpacity(0.3), width: 1.5),
-                ),
-                child: Icon(Icons.directions_run_rounded,
-                    color: accentColor, size: 36),
+              Image.asset(
+                'assets/images/favicon.png',
+                width:  80,
+                height: 80,
               ),
               const SizedBox(height: 14),
               Text(
@@ -336,12 +324,12 @@ class _LoginScreenState extends State<LoginScreen> {
               child: const Text.rich(
                 TextSpan(
                   text: "Don't have an account? ",
-                  style: TextStyle(color: Colors.grey),
+                  style: TextStyle(color: Color(0xFF666680)),
                   children: [
                     TextSpan(
                       text: 'Register',
                       style: TextStyle(
-                          color: Colors.blue, fontWeight: FontWeight.bold),
+                          color: Color(0xFF00FF9C), fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),

@@ -27,7 +27,9 @@ class _AnomalyAlertOverlayState extends State<AnomalyAlertOverlay> {
         .ref('races/${widget.raceId}/anomalies');
 
     _sub = ref.onChildAdded.listen((event) {
-      final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+      final raw = event.snapshot.value;
+      if (raw is! Map) return;
+      final data = Map<String, dynamic>.from(raw);
       final runnerId = event.snapshot.key ?? 'Unknown';
       final reason = data['reason'] ?? 'Suspicious activity detected';
       final resolved = data['resolved'] ?? false;
@@ -49,7 +51,9 @@ class _AnomalyAlertOverlayState extends State<AnomalyAlertOverlay> {
 
     // Also listen to updates (e.g., resolved = true)
     ref.onChildChanged.listen((event) {
-      final data = Map<String, dynamic>.from(event.snapshot.value as Map);
+      final rawChanged = event.snapshot.value;
+      if (rawChanged is! Map) return;
+      final data = Map<String, dynamic>.from(rawChanged);
       final runnerId = event.snapshot.key ?? '';
       final resolved = data['resolved'] ?? false;
       if (resolved) {

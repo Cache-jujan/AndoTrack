@@ -1,6 +1,6 @@
 from models.result import RaceResult
 from utils.pace import get_runner_pace_summary
-from utils.distance_tracker import get_all_runners_distance, get_last_position
+from utils.distance_tracker import get_all_runners_distance, get_last_position, get_distance_km
 from utils.auth import hash_password
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -68,6 +68,30 @@ def get_races(
     """
     races = db.query(Race).order_by(Race.scheduled_start.asc()).all()
     return [_race_to_response(r, db) for r in races]
+
+
+@router.get("/public")
+def get_public_races(db: Session = Depends(get_db)):
+    """Public endpoint — no auth. Returns only currently active races as plain dicts."""
+    races = db.query(Race).filter(Race.status == "active").all()
+    result = []
+    for race in races:
+        count = db.query(func.count(RaceRunner.id)).filter(
+            RaceRunner.race_id == race.id
+        ).scalar() or 0
+        result.append({
+            "id":                race.id,
+            "name":              race.name,
+            "distance_km":       race.distance_km,
+            "category":          race.category,
+            "status":            race.status,
+            "location":          race.location,
+            "scheduled_start":   race.scheduled_start,
+            "participant_count": count,
+            "max_participants":  race.max_participants,
+            "banner_url":        race.banner_url,
+        })
+    return result
 
 
 @router.get("/{race_id}", response_model=RaceResponse)
@@ -153,6 +177,11 @@ def start_race(
         raise HTTPException(status_code=400, detail="Race is already finished.")
 
     race.status = "active"
+    # Auto-transition checked-in runners to 'racing' so live dashboard count is non-zero.
+    db.query(RaceRunner).filter(
+        RaceRunner.race_id == race_id,
+        RaceRunner.is_present == True,
+    ).update({"race_status": "racing"})
     db.commit()
     db.refresh(race)
     return {"message": f"Race '{race.name}' has started!", "status": race.status}
@@ -481,7 +510,23 @@ def get_anomalies(
         query = query.filter(Anomaly.runner_id == runner_id)
     if resolved is not None:
         query = query.filter(Anomaly.resolved == resolved)
-    return query.all()
+    anomalies = query.order_by(Anomaly.detected_at.desc()).all()
+    result = []
+    for a in anomalies:
+        runner = db.query(User).filter(User.id == a.runner_id).first()
+        result.append({
+            "id":           a.id,
+            "race_id":      a.race_id,
+            "runner_id":    a.runner_id,
+            "runner_name":  runner.name if runner else f"Runner #{a.runner_id}",
+            "reason":       a.reason,
+            "score":        a.score,
+            "lat":          a.lat,
+            "lng":          a.lng,
+            "detected_at":  a.detected_at,
+            "resolved":     a.resolved,
+        })
+    return result
 
 @router.patch("/{race_id}/anomalies/{anomaly_id}/resolve")
 def resolve_anomaly(
@@ -977,6 +1022,38 @@ def deactivate_staff(
     }
 
 
+@router.patch("/{race_id}/staff/{staff_id}/reset-password")
+def reset_staff_password(
+    race_id: int,
+    staff_id: int,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if user.get("role") not in ("organizer", "race_director"):
+        raise HTTPException(status_code=403, detail="Only organizers can reset staff passwords.")
+
+    assignment = db.query(StaffAssignment).filter(
+        StaffAssignment.race_id == race_id,
+        StaffAssignment.user_id == staff_id,
+    ).first()
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Staff assignment not found.")
+
+    staff = db.query(User).filter(User.id == staff_id).first()
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff user not found.")
+
+    new_pw = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+    staff.password = hash_password(new_pw)
+    db.commit()
+
+    return {
+        "staff_id":      staff.id,
+        "name":          staff.name,
+        "temp_password": new_pw,
+    }
+
+
 # ── Check-in QR (static, organizer/staff displays it) ────────────────────────
 
 @router.get("/{race_id}/checkin-qr")
@@ -1137,4 +1214,45 @@ def simulate_payment(
         "bib_number": registration.bib_number,
         "shirt_size": registration.shirt_size,
         "race_status": registration.race_status,
+    }
+
+
+# ── Public runner positions ───────────────────────────────────────────────────
+
+@router.get("/{race_id}/public-positions")
+def get_public_runner_positions(
+    race_id: int,
+    db: Session = Depends(get_db),
+):
+    """Public endpoint — no auth. Returns live GPS positions for runners in an active race."""
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    if race.status != "active":
+        return {"race_id": race_id, "status": race.status, "runners": []}
+
+    race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+
+    runners_out = []
+    for rr in race_runners:
+        pos = get_last_position(race_id, str(rr.runner_id))
+        if pos is None:
+            continue
+        lat, lng = pos
+        dist_km = get_distance_km(race_id, str(rr.runner_id))
+        runners_out.append({
+            "runner_id":   rr.runner_id,
+            "bib_number":  getattr(rr, "bib_number", None),
+            "lat":         lat,
+            "lng":         lng,
+            "distance_km": dist_km,
+        })
+
+    return {
+        "race_id":        race_id,
+        "race_name":      race.name,
+        "status":         race.status,
+        "total_with_gps": len(runners_out),
+        "runners":        runners_out,
     }

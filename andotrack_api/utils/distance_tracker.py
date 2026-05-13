@@ -26,6 +26,7 @@ class _RunnerState:
     last_lng: float
     total_metres: float = 0.0
     point_count: int = 1        # number of GPS pings recorded (incl. the first)
+    prev_speed: float = 0.0
 
 
 # key: (race_id, runner_id)  →  _RunnerState

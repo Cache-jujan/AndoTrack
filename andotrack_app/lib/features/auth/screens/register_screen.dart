@@ -5,6 +5,7 @@
 // through the web dashboard. Do NOT add organizer/staff registration here.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
 import 'package:andotrack_app/roles/runner_app/runner_dashboard_screen.dart';
@@ -79,22 +80,61 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
+  static const _kBg      = Color(0xFF0A0A0F);
+  static const _kSurface = Color(0xFF080810);
+  static const _kBorder  = Color(0xFF1E1E30);
+  static const _kAccent  = Color(0xFF00FF9C);
+  static const _kLabel   = Colors.white;
+  static const _kSub     = Color(0xFF888899);
+  static const _kMuted   = Color(0xFF666680);
+
+  InputDecoration _inputDeco({
+    required String   hint,
+    required IconData icon,
+    Widget?           suffix,
+  }) =>
+      InputDecoration(
+        hintText:    hint,
+        hintStyle:   const TextStyle(color: _kMuted, fontSize: 14),
+        prefixIcon:  Icon(icon, color: _kSub, size: 18),
+        suffixIcon:  suffix,
+        filled:      true,
+        fillColor:   _kSurface,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:   const BorderSide(color: _kBorder),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:   const BorderSide(color: _kBorder),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide:   const BorderSide(color: _kAccent, width: 1.5),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: _kBg,
       appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
+        backgroundColor: _kBg,
+        elevation:       0,
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarBrightness:     Brightness.dark,
+          statusBarIconBrightness: Brightness.light,
+        ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          icon:      const Icon(Icons.arrow_back, color: _kSub),
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -103,29 +143,25 @@ class _RegisterScreenState extends State<RegisterScreen> {
               Center(
                 child: Column(
                   children: [
-                    Container(
-                      width: 80, height: 80,
-                      decoration: BoxDecoration(
-                        color:        Colors.blue,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: const Icon(
-                        Icons.directions_run,
-                        color: Colors.white, size: 48,
-                      ),
+                    Image.asset(
+                      'assets/images/favicon.png',
+                      width:  80,
+                      height: 80,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     const Text(
                       'Create Account',
                       style: TextStyle(
-                        fontSize:   28,
-                        fontWeight: FontWeight.bold,
-                        color:      Colors.blue,
+                        fontSize:     28,
+                        fontWeight:   FontWeight.w900,
+                        color:        _kLabel,
+                        letterSpacing: -0.5,
                       ),
                     ),
+                    const SizedBox(height: 4),
                     const Text(
                       'Join AndoTrack as a Runner',
-                      style: TextStyle(color: Colors.grey),
+                      style: TextStyle(color: _kSub, fontSize: 13),
                     ),
                   ],
                 ),
@@ -135,16 +171,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               // ── Full Name ─────────────────────────────────────────────
               const Text('Full Name',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color:      _kLabel,
+                      fontSize:   13)),
               const SizedBox(height: 8),
               TextField(
-                controller: _nameCtrl,
+                controller:         _nameCtrl,
                 textCapitalization: TextCapitalization.words,
-                decoration: InputDecoration(
-                  hintText:   'Enter your name',
-                  prefixIcon: const Icon(Icons.person_outline),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                style:              const TextStyle(color: _kLabel),
+                decoration:         _inputDeco(
+                  hint: 'Enter your name',
+                  icon: Icons.person_outline_rounded,
                 ),
               ),
 
@@ -152,16 +190,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               // ── Email ─────────────────────────────────────────────────
               const Text('Email',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color:      _kLabel,
+                      fontSize:   13)),
               const SizedBox(height: 8),
               TextField(
                 controller:   _emailCtrl,
                 keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  hintText:   'Enter your email',
-                  prefixIcon: const Icon(Icons.email_outlined),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
+                style:        const TextStyle(color: _kLabel),
+                decoration:   _inputDeco(
+                  hint: 'Enter your email',
+                  icon: Icons.email_outlined,
                 ),
               ),
 
@@ -169,25 +209,28 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
               // ── Password ──────────────────────────────────────────────
               const Text('Password',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+                  style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color:      _kLabel,
+                      fontSize:   13)),
               const SizedBox(height: 8),
               TextField(
                 controller:  _passwordCtrl,
                 obscureText: _obscurePassword,
-                decoration: InputDecoration(
-                  hintText:   'At least 6 characters',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
+                style:       const TextStyle(color: _kLabel),
+                decoration:  _inputDeco(
+                  hint:   'At least 6 characters',
+                  icon:   Icons.lock_outline_rounded,
+                  suffix: IconButton(
                     icon: Icon(
                       _obscurePassword
-                          ? Icons.visibility_off
-                          : Icons.visibility,
+                          ? Icons.visibility_off_outlined
+                          : Icons.visibility_outlined,
+                      color: _kSub, size: 18,
                     ),
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                   ),
-                  border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12)),
                 ),
               ),
 
@@ -197,15 +240,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
               if (_errorMessage != null)
                 Container(
                   width:   double.infinity,
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
                   decoration: BoxDecoration(
-                    color:        Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(8),
-                    border:       Border.all(color: Colors.red.shade200),
+                    color:        const Color(0xFFFF4D4D).withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(10),
+                    border:       Border.all(
+                        color: const Color(0xFFFF4D4D).withOpacity(0.3)),
                   ),
                   child: Text(
                     _errorMessage!,
-                    style: TextStyle(color: Colors.red.shade700),
+                    style: const TextStyle(
+                        color: Color(0xFFFF6B6B), fontSize: 13),
                   ),
                 ),
 
@@ -214,25 +260,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
               // ── Submit ────────────────────────────────────────────────
               SizedBox(
                 width:  double.infinity,
-                height: 52,
+                height: 50,
                 child: ElevatedButton(
                   onPressed: _isLoading ? null : _register,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
+                    backgroundColor: _kAccent,
+                    foregroundColor: Colors.black,
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
+                    elevation: 0,
                   ),
                   child: _isLoading
                       ? const SizedBox(
-                          width: 24, height: 24,
+                          width: 20, height: 20,
                           child: CircularProgressIndicator(
-                              color: Colors.white, strokeWidth: 2),
+                              color: Colors.black, strokeWidth: 2),
                         )
                       : const Text(
                           'Create Account',
                           style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold),
+                              fontSize:   15,
+                              fontWeight: FontWeight.bold),
                         ),
                 ),
               ),
@@ -245,13 +293,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   onPressed: () => Navigator.pop(context),
                   child: const Text.rich(
                     TextSpan(
-                      text: 'Already have an account? ',
-                      style: TextStyle(color: Colors.grey),
+                      text:  'Already have an account? ',
+                      style: TextStyle(color: _kMuted),
                       children: [
                         TextSpan(
-                          text: 'Sign In',
+                          text:  'Sign In',
                           style: TextStyle(
-                              color:      Colors.blue,
+                              color:      _kAccent,
                               fontWeight: FontWeight.bold),
                         ),
                       ],

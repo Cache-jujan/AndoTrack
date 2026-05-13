@@ -1,5 +1,5 @@
 // MOVED TO: lib/features/map/screens/map_screen.dart
-
+import 'package:andotrack_app/core/services/location_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -256,7 +256,9 @@ class _MapScreenState extends State<MapScreen>
 
   @override
   Widget build(BuildContext context) {
-    final checkpointMarkers = widget.checkpoints.map((cp) {
+    // Reversed so lower-order checkpoints render on top when coordinates overlap
+    // (flutter_map paints last item on top; CP1 must win over CP5 at shared coords)
+    final checkpointMarkers = widget.checkpoints.reversed.map((cp) {
       final lat = cp['lat'] as double;
       final lng = cp['lng'] as double;
       final name = cp['name'] ?? 'Checkpoint';
@@ -337,8 +339,8 @@ class _MapScreenState extends State<MapScreen>
                   children: [
                     TileLayer(
                       urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      userAgentPackageName: 'com.example.andotrack_app',
+                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
                     ),
                     MarkerLayer(
                       markers: [

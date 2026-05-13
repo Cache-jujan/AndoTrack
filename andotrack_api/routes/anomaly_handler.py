@@ -24,10 +24,13 @@ def save_and_push_anomaly(
     db.commit()
 
     # Push to Firebase so organizer sees it instantly
-    firebase_db.reference(f"races/{race_id}/anomalies/{runner_id}").set({
-        "reason": reason,
-        "score": score,
-        "lat": lat,
-        "lng": lng,
-        "resolved": False
-    })
+    try:
+        firebase_db.reference(f"races/{race_id}/anomalies/{runner_id}").set({
+            "reason": reason,
+            "score": score,
+            "lat": lat,
+            "lng": lng,
+            "resolved": False
+        })
+    except Exception as e:
+        print(f"FIREBASE ERROR: {e}")

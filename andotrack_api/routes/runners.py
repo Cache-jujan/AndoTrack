@@ -1,5 +1,6 @@
 from datetime import date
 from unittest import runner
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -11,10 +12,12 @@ from models.race import Race, RaceRunner
 from models.user import User
 from models.anomaly import Anomaly
 from models.result import RaceResult
+
 from database import get_db
 from utils.dependencies import get_current_user
 from utils.pace import record_speed, get_runner_pace_summary, get_pace_min_per_km, format_pace
 from utils.distance_tracker import (
+    _tracker,
     record_position,
     get_distance_summary,
     get_all_runners_distance,
@@ -37,6 +40,15 @@ if os.path.exists(_MODEL_PATH):
         _anomaly_model = pickle.load(_f)
 else:
     print(f"⚠️ Model not found at: {os.path.abspath(_MODEL_PATH)}")
+
+_ANOMALY_COOLDOWN_SECS = 30
+_LOCATION_OFF_SECS = 60        # runner silent this long → location_off
+_LOCATION_OFF_COOLDOWN = 120   # re-alert at most every 2 min per silent runner
+# key: (race_id, runner_key) → epoch-seconds of last fired anomaly
+_anomaly_cooldown: dict[tuple[int, str], float] = {}
+# key: (race_id, runner_key) → epoch-seconds of last received ping
+_last_ping: dict[tuple[int, str], float] = {}
+
 router = APIRouter()
 
 
@@ -77,13 +89,24 @@ def update_location(
     record_speed(runner_key, body.speed)
     pace = get_runner_pace_summary(runner_key)
 
-    # Get previous position BEFORE updating
+    # Get previous position and speed BEFORE updating
     prev = get_last_position(body.race_id, runner_key)
+    old_state = _tracker.get((body.race_id, runner_key))
+    old_speed = old_state.prev_speed if old_state else 0.0
 
     delta    = record_position(body.race_id, runner_key, body.lat, body.lng)
     distance = get_distance_summary(body.race_id, runner_key)
 
-    # ── Anomaly detection ─────────────────────────────────────────────────
+    # Store current speed as prev_speed for next ping
+    new_state = _tracker.get((body.race_id, runner_key))
+    if new_state is not None:
+        new_state.prev_speed = body.speed
+
+    # ── Track ping time (used for location_off detection) ─────────────────
+    now_ts = time.time()
+    _last_ping[(body.race_id, runner_key)] = now_ts
+
+    # ── ML anomaly detection (vehicle_speed / gps_jump only) ──────────────
     anomaly_result = None
     if _anomaly_model is not None and prev is not None:
         prev_lat, prev_lng = prev
@@ -93,13 +116,15 @@ def update_location(
             current_speed=body.speed,
             prev_lat=prev_lat,
             prev_lng=prev_lng,
-            prev_speed=body.speed,
-            route_lat=body.lat,
-            route_lng=body.lng,
+            prev_speed=old_speed,
+            route_lat=prev_lat,
+            route_lng=prev_lng,
             time_delta=5.0,
         )
         is_anomaly, reason, score = run_anomaly_detection(_anomaly_model, features)
-        if is_anomaly:
+        cooldown_key = (body.race_id, runner_key)
+        if is_anomaly and (now_ts - _anomaly_cooldown.get(cooldown_key, 0.0)) >= _ANOMALY_COOLDOWN_SECS:
+            _anomaly_cooldown[cooldown_key] = now_ts
             try:
                 save_and_push_anomaly(
                     db=db,
@@ -115,6 +140,29 @@ def update_location(
                 print(f"ANOMALY ERROR: {e}")
                 import traceback
                 traceback.print_exc()
+
+    # ── Location-off detection (rule-based, no ML) ─────────────────────────
+    for (r_id, r_key), last_t in _last_ping.items():
+        if r_id != body.race_id or r_key == runner_key:
+            continue
+        if (now_ts - last_t) >= _LOCATION_OFF_SECS:
+            off_key = (r_id, r_key)
+            if (now_ts - _anomaly_cooldown.get(off_key, 0.0)) >= _LOCATION_OFF_COOLDOWN:
+                _anomaly_cooldown[off_key] = now_ts
+                silent_pos = get_last_position(r_id, r_key)
+                if silent_pos:
+                    try:
+                        save_and_push_anomaly(
+                            db=db,
+                            runner_id=int(r_key),
+                            race_id=r_id,
+                            reason="location_off",
+                            score=1.0,
+                            lat=silent_pos[0],
+                            lng=silent_pos[1],
+                        )
+                    except Exception as e:
+                        print(f"LOCATION_OFF ERROR: {e}")
 
     return {
         "runner_id":  runner_id,

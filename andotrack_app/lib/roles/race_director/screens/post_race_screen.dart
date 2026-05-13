@@ -24,6 +24,31 @@ const _kTextPri   = Colors.white;
 const _kTextSub   = Color(0xFF8888AA);
 const _kTextMuted = Color(0xFF3A3A55);
 
+// ── Philippine time helper ────────────────────────────────────────────────────
+
+DateTime _toPhilippineTime(DateTime utc) =>
+    utc.add(const Duration(hours: 8));
+
+// ── Segment helpers ───────────────────────────────────────────────────────────
+
+Color _segmentColor(String? segment) {
+  switch (segment) {
+    case 'competitive':  return _kAmber;
+    case 'recreational': return _kBlue;
+    case 'casual':       return _kTextSub;
+    default:             return _kTextMuted;
+  }
+}
+
+String _segmentLabel(String? segment) {
+  switch (segment) {
+    case 'competitive':  return 'COMP';
+    case 'recreational': return 'REC';
+    case 'casual':       return 'CAS';
+    default:             return '—';
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 class PostRaceScreen extends StatefulWidget {
@@ -39,9 +64,10 @@ class _PostRaceScreenState extends State<PostRaceScreen>
   late final TabController _tabCtrl;
 
   // ── Data ──────────────────────────────────────────────────────────────────
-  List<Map<String, dynamic>> _leaderboard = [];
-  List<Map<String, dynamic>> _runners     = [];
-  Map<String, dynamic>       _anomalyRpt  = {};
+  List<Map<String, dynamic>> _leaderboard   = [];
+  List<Map<String, dynamic>> _runners       = [];
+  Map<String, dynamic>       _anomalyRpt    = {};
+  Map<String, dynamic>       _analyticsData = {};
   bool    _loading = true;
   String? _error;
 
@@ -51,13 +77,11 @@ class _PostRaceScreenState extends State<PostRaceScreen>
   // ── Computed stats ────────────────────────────────────────────────────────
   int get _registered  => _runners.length;
   int get _checkedIn   =>
-      _runners.where((r) =>
-          r['checked_in'] == true || r['is_checked_in'] == true).length;
-  int get _finishers   =>
-      _runners.where((r) => r['status']?.toString() == 'finished').length;
+      _runners.where((r) => r['is_present'] == true).length;
+  int get _finishers   => _leaderboard.length;
   int get _dnfDns      => _runners
       .where((r) {
-        final s = r['status']?.toString() ?? '';
+        final s = r['race_status']?.toString() ?? '';
         return s == 'dnf' || s == 'dns';
       }).length;
 
@@ -77,24 +101,25 @@ class _PostRaceScreenState extends State<PostRaceScreen>
   Future<void> _loadAll() async {
     setState(() { _loading = true; _error = null; });
     try {
-      // Fetch runners first — required for header stats
       final runners = await ApiService.getRaceRunners(_raceId);
-      // These can fail gracefully — leaderboard may be empty for finished races
-      final leaderboard  = await ApiService.getLeaderboard(_raceId)
+      final leaderboard = await ApiService.getLeaderboard(_raceId)
           .catchError((_) => <Map<String, dynamic>>[]);
-      final anomalyRpt   = await ApiService.getAnomalyReport(_raceId)
+      final anomalyRpt = await ApiService.getAnomalyReport(_raceId)
           .catchError((_) => <String, dynamic>{
             'total': 0, 'vehicle_speed': 0, 'gps_jump': 0,
             'off_route': 0, 'erratic': 0,
             'resolved': 0, 'unresolved': 0,
             'flagged_runners': <dynamic>[],
           });
+      final analyticsData = await ApiService.getAnalytics(_raceId)
+          .catchError((_) => <String, dynamic>{});
       if (!mounted) return;
       setState(() {
-        _runners     = runners;
-        _leaderboard = leaderboard;
-        _anomalyRpt  = anomalyRpt;
-        _loading     = false;
+        _runners       = runners;
+        _leaderboard   = leaderboard;
+        _anomalyRpt    = anomalyRpt;
+        _analyticsData = analyticsData;
+        _loading       = false;
       });
     } catch (e) {
       if (mounted) setState(() { _error = e.toString(); _loading = false; });
@@ -105,18 +130,19 @@ class _PostRaceScreenState extends State<PostRaceScreen>
 
   void _exportResults() {
     final buf = StringBuffer();
-    buf.writeln('Rank,Bib,Name,Finish Time,Pace (min/km)');
+    buf.writeln('Rank,Bib,Name,Finish Time,Pace (min/km),Segment');
     for (var i = 0; i < _leaderboard.length; i++) {
-      final row  = _leaderboard[i];
-      final rank = i + 1;
-      final bib  = row['bib_number']?.toString() ?? '';
-      final name = (row['name']?.toString() ?? '').replaceAll(',', ' ');
-      final secs = (row['finish_time_seconds'] as num?)?.toInt();
+      final row     = _leaderboard[i];
+      final rank    = i + 1;
+      final bib     = row['bib_number']?.toString() ?? '';
+      final name    = (row['name']?.toString() ?? '').replaceAll(',', ' ');
+      final secs    = (row['finish_time_seconds'] as num?)?.toInt();
       final timeStr = secs != null ? _fmtSecs(secs) : '';
       final pace    = (secs != null && _distKm > 0)
           ? _fmtPace(secs / _distKm)
           : '';
-      buf.writeln('$rank,$bib,$name,$timeStr,$pace');
+      final segment = row['segment']?.toString() ?? '';
+      buf.writeln('$rank,$bib,$name,$timeStr,$pace,$segment');
     }
     _showCsvDialog('Results', buf.toString());
   }
@@ -231,9 +257,8 @@ class _PostRaceScreenState extends State<PostRaceScreen>
                 onExport:     _exportResults,
               ),
               _AnalyticsTab(
-                runners:     _runners,
-                leaderboard: _leaderboard,
-                distKm:      _distKm,
+                analyticsData: _analyticsData,
+                raceId:        _raceId,
               ),
               _AnomalyReportTab(report: _anomalyRpt),
             ],
@@ -255,7 +280,6 @@ class _PostRaceScreenState extends State<PostRaceScreen>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Back button
           IconButton(
             icon: const Icon(Icons.arrow_back_rounded,
                 color: _kTextSub, size: 20),
@@ -320,8 +344,6 @@ class _PostRaceScreenState extends State<PostRaceScreen>
               ],
             ),
           ),
-
-          // Refresh
           IconButton(
             icon: const Icon(Icons.refresh_rounded,
                 color: _kTextSub, size: 18),
@@ -380,16 +402,16 @@ class _PostRaceScreenState extends State<PostRaceScreen>
         border: Border(bottom: BorderSide(color: _kBorder)),
       ),
       child: TabBar(
-        controller:       _tabCtrl,
-        labelColor:       _kGreen,
+        controller:           _tabCtrl,
+        labelColor:           _kGreen,
         unselectedLabelColor: _kTextSub,
-        labelStyle:       const TextStyle(
+        labelStyle:           const TextStyle(
             fontWeight: FontWeight.w700, fontSize: 13),
         unselectedLabelStyle: const TextStyle(fontSize: 13),
-        indicatorColor:   _kGreen,
-        indicatorWeight:  2,
-        indicatorSize:    TabBarIndicatorSize.label,
-        padding:          const EdgeInsets.symmetric(horizontal: 20),
+        indicatorColor:       _kGreen,
+        indicatorWeight:      2,
+        indicatorSize:        TabBarIndicatorSize.label,
+        padding:              const EdgeInsets.symmetric(horizontal: 20),
         tabs: const [
           Tab(text: 'Results'),
           Tab(text: 'Analytics'),
@@ -490,7 +512,7 @@ class _StatCard extends StatelessWidget {
 class _ResultsTab extends StatelessWidget {
   final List<Map<String, dynamic>> leaderboard;
   final List<Map<String, dynamic>> runners;
-  final double    distKm;
+  final double       distKm;
   final VoidCallback onExport;
 
   const _ResultsTab({
@@ -528,10 +550,8 @@ class _ResultsTab extends StatelessWidget {
           ),
         ),
 
-        // Column headers
         _tableHeader(),
 
-        // Rows — Finishers → DNF → DNS
         Expanded(child: _buildAllResults()),
       ],
     );
@@ -557,7 +577,6 @@ class _ResultsTab extends StatelessWidget {
 
     final items = <Widget>[];
 
-    // Finishers
     if (leaderboard.isEmpty) {
       items.add(const Padding(
         padding: EdgeInsets.symmetric(vertical: 16),
@@ -577,7 +596,6 @@ class _ResultsTab extends StatelessWidget {
       }
     }
 
-    // DNF section
     if (dnf.isNotEmpty) {
       items.add(_SectionDivider(
           label: 'DID NOT FINISH', count: dnf.length, color: _kAmber));
@@ -586,7 +604,6 @@ class _ResultsTab extends StatelessWidget {
       }
     }
 
-    // DNS section
     if (dns.isNotEmpty) {
       items.add(_SectionDivider(
           label: 'DID NOT START', count: dns.length, color: _kTextMuted));
@@ -620,6 +637,8 @@ class _ResultsTab extends StatelessWidget {
               child: Text('Time', style: _hdr, textAlign: TextAlign.right)),
           SizedBox(width: 100,
               child: Text('Pace', style: _hdr, textAlign: TextAlign.right)),
+          SizedBox(width: 90,
+              child: Text('Segment', style: _hdr, textAlign: TextAlign.right)),
         ],
       ),
     );
@@ -648,20 +667,26 @@ class _LeaderboardRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bib    = entry['bib_number']?.toString() ?? '—';
-    final name   = entry['name']?.toString()
+    final bib  = entry['bib_number']?.toString() ?? '—';
+    final name = entry['name']?.toString()
         ?? entry['runner_name']?.toString() ?? 'Unknown';
-    // Backend may return finish_time_seconds, finish_time, or elapsed_seconds
-    final secRaw = entry['finish_time_seconds']
-        ?? entry['finish_time']
-        ?? entry['elapsed_seconds'];
-    final secs = (secRaw as num?)?.toInt();
-    final time = secs != null ? _fmtSecs(secs) : '—';
-    final pace = (secs != null && distKm > 0)
-        ? _fmtPace(secs / distKm)
-        : '—';
 
-    // Medal colors for top 3
+    // finished_at is a UTC field — display in PHT (UTC+8).
+    final finishedAtRaw = entry['finished_at']?.toString();
+    String time = '—';
+    if (finishedAtRaw != null) {
+      try {
+        final dt = _toPhilippineTime(DateTime.parse(finishedAtRaw));
+        time = '${dt.hour.toString().padLeft(2, '0')}:'
+            '${dt.minute.toString().padLeft(2, '0')}:'
+            '${dt.second.toString().padLeft(2, '0')}';
+      } catch (_) {}
+    }
+
+    final pace    = entry['pace_formatted']?.toString() ?? '—';
+    final segment = entry['segment']?.toString();
+    final segColor = _segmentColor(segment);
+
     Color nameColor = _kTextPri;
     if (rank == 1) nameColor = _kAmber;
     else if (rank == 2) nameColor = const Color(0xFFC0C0C0);
@@ -726,6 +751,32 @@ class _LeaderboardRow extends StatelessWidget {
               textAlign: TextAlign.right,
             ),
           ),
+          SizedBox(
+            width: 90,
+            child: segment != null
+                ? Align(
+                    alignment: Alignment.centerRight,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color:        segColor.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(4),
+                        border:       Border.all(color: segColor.withOpacity(0.3)),
+                      ),
+                      child: Text(
+                        _segmentLabel(segment),
+                        style: TextStyle(
+                          color:         segColor,
+                          fontSize:      9,
+                          fontWeight:    FontWeight.w800,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
       ),
     );
@@ -734,206 +785,481 @@ class _LeaderboardRow extends StatelessWidget {
 
 // ── Analytics tab ─────────────────────────────────────────────────────────────
 
-class _AnalyticsTab extends StatelessWidget {
-  final List<Map<String, dynamic>> runners;
-  final List<Map<String, dynamic>> leaderboard;
-  final double distKm;
+class _AnalyticsTab extends StatefulWidget {
+  final Map<String, dynamic> analyticsData;
+  final int raceId;
 
   const _AnalyticsTab({
-    required this.runners,
-    required this.leaderboard,
-    required this.distKm,
+    required this.analyticsData,
+    required this.raceId,
   });
 
   @override
+  State<_AnalyticsTab> createState() => _AnalyticsTabState();
+}
+
+class _AnalyticsTabState extends State<_AnalyticsTab> {
+  String _selectedSegment = 'all';
+  List<Map<String, dynamic>> _segmentRunners = [];
+  bool _loadingExport = false;
+  bool _exportLoaded  = false;
+
+  Future<void> _loadSegment(String segment) async {
+    setState(() { _loadingExport = true; _exportLoaded = false; });
+    try {
+      final result = await ApiService.exportSegment(widget.raceId, segment);
+      final runners =
+          (result['runners'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      if (mounted) {
+        setState(() {
+          _segmentRunners = runners;
+          _loadingExport  = false;
+          _exportLoaded   = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() { _loadingExport = false; _exportLoaded = true; });
+    }
+  }
+
+  String _segmentDisplayName(String seg) =>
+      seg == 'all' ? 'All Runners' : seg[0].toUpperCase() + seg.substring(1);
+
+  @override
   Widget build(BuildContext context) {
-    final registered = runners.length;
-    final finishers  = runners
-        .where((r) => r['status']?.toString() == 'finished').length;
-    final completionPct =
-        registered > 0 ? (finishers / registered * 100).toStringAsFixed(1) : '0';
+    final data = widget.analyticsData;
 
-    // Average finish time
-    final finishTimes = leaderboard
-        .map((e) => (e['finish_time_seconds'] as num?)?.toInt())
-        .where((s) => s != null)
-        .cast<int>()
-        .toList();
-    final avgSecs = finishTimes.isEmpty
-        ? null
-        : finishTimes.reduce((a, b) => a + b) ~/ finishTimes.length;
-    final fastestSecs = finishTimes.isEmpty ? null : finishTimes.first;
-    final slowestSecs =
-        finishTimes.isEmpty ? null : finishTimes.last;
+    if (data.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.analytics_outlined, color: _kTextMuted, size: 36),
+              SizedBox(height: 12),
+              Text(
+                'Analytics not available for this race.',
+                style: TextStyle(color: _kTextSub, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
-    // Pace buckets (performance segments)
-    final buckets = _buildBuckets(finishTimes, distKm);
+    final funnel   = data['participation_funnel'] as Map<String, dynamic>? ?? {};
+    final segments = data['segments']             as Map<String, dynamic>? ?? {};
+    final anomaly  = data['anomaly_summary']      as Map<String, dynamic>? ?? {};
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Summary row
-          Row(
-            children: [
-              _AnalyticCard(
-                label: 'Completion Rate',
-                value: '$completionPct%',
-                color: _kGreen,
-              ),
-              const SizedBox(width: 12),
-              _AnalyticCard(
-                label: 'Average Time',
-                value: avgSecs != null ? _fmtSecs(avgSecs) : '—',
-                color: _kBlue,
-              ),
-              const SizedBox(width: 12),
-              _AnalyticCard(
-                label: 'Fastest',
-                value: fastestSecs != null ? _fmtSecs(fastestSecs) : '—',
-                color: _kAmber,
-              ),
-              const SizedBox(width: 12),
-              _AnalyticCard(
-                label: 'Slowest',
-                value: slowestSecs != null ? _fmtSecs(slowestSecs) : '—',
-                color: _kTextSub,
-              ),
-            ],
-          ),
+          // ── Participation Funnel ──────────────────────────────
+          const _SectionHeader('Participation Funnel'),
+          const SizedBox(height: 14),
+          _buildFunnel(funnel),
 
           const SizedBox(height: 28),
 
-          // Pace distribution
-          if (buckets.isNotEmpty) ...[
-            const Text(
-              'Finish Time Distribution',
-              style: TextStyle(
-                color:      _kTextPri,
-                fontSize:   14,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
+          // ── Segment Breakdown ─────────────────────────────────
+          const _SectionHeader('Performance Segments'),
+          const SizedBox(height: 14),
+          _buildSegments(segments),
+
+          const SizedBox(height: 28),
+
+          // ── Anomaly Summary ───────────────────────────────────
+          if (anomaly.isNotEmpty) ...[
+            const _SectionHeader('Anomaly Summary'),
             const SizedBox(height: 14),
-            ...buckets.map((b) => _PaceBar(
-                  label:   b.label,
-                  count:   b.count,
-                  total:   finishers,
-                  color:   b.color,
-                )),
+            _buildAnomalySummary(anomaly),
+            const SizedBox(height: 28),
           ],
 
-          const SizedBox(height: 28),
-
-          // Status breakdown
-          const Text(
-            'Runner Status Breakdown',
-            style: TextStyle(
-              color:      _kTextPri,
-              fontSize:   14,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+          // ── Segment Export ────────────────────────────────────
+          const _SectionHeader('Export by Segment'),
           const SizedBox(height: 14),
-          _buildStatusBreakdown(),
+          _buildSegmentExport(),
         ],
       ),
     );
   }
 
-  Widget _buildStatusBreakdown() {
-    final groups = <String, int>{};
-    for (final r in runners) {
-      final s = r['status']?.toString() ?? 'unknown';
-      groups[s] = (groups[s] ?? 0) + 1;
+  Widget _buildFunnel(Map<String, dynamic> funnel) {
+    final registered = funnel['registered'] as int? ?? 0;
+    final checkedIn  = funnel['checked_in'] as int? ?? 0;
+    final finishers  = funnel['finishers']  as int? ?? 0;
+    final dnf        = funnel['dnf']        as int? ?? 0;
+    final dns        = funnel['dns']        as int? ?? 0;
+    final noShowRate = (funnel['no_show_rate'] as num?)?.toStringAsFixed(1) ?? '0.0';
+    final dnfRate    = (funnel['dnf_rate']     as num?)?.toStringAsFixed(1) ?? '0.0';
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            _AnalyticCard(label: 'Registered', value: '$registered', color: _kBlue),
+            const SizedBox(width: 10),
+            _AnalyticCard(label: 'Checked In', value: '$checkedIn',  color: _kPurple),
+            const SizedBox(width: 10),
+            _AnalyticCard(label: 'Finishers',  value: '$finishers',  color: _kGreen),
+            const SizedBox(width: 10),
+            _AnalyticCard(label: 'DNF',        value: '$dnf',        color: _kAmber),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            _AnalyticCard(label: 'DNS',          value: '$dns',         color: _kTextSub),
+            const SizedBox(width: 10),
+            _AnalyticCard(label: 'No-Show Rate', value: '$noShowRate%', color: _kRed),
+            const SizedBox(width: 10),
+            _AnalyticCard(label: 'DNF Rate',     value: '$dnfRate%',    color: _kAmber),
+            const SizedBox(width: 10),
+            const Expanded(child: SizedBox.shrink()),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSegments(Map<String, dynamic> segments) {
+    const keys = ['competitive', 'recreational', 'casual'];
+    final cards = <Widget>[];
+    for (var i = 0; i < keys.length; i++) {
+      final key  = keys[i];
+      final seg  = segments[key] as Map<String, dynamic>? ?? {};
+      final count = (seg['count'] as num?)?.toInt() ?? 0;
+      final pace  = seg['avg_pace_formatted']?.toString() ?? '—';
+      final color = _segmentColor(key);
+      if (i > 0) cards.add(const SizedBox(width: 10));
+      cards.add(Expanded(
+        child: _SegmentCard(
+          segmentKey: key,
+          count:      count,
+          pace:       pace,
+          color:      color,
+        ),
+      ));
     }
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: groups.entries.map((e) {
-        Color color;
-        switch (e.key) {
-          case 'finished': color = _kGreen;      break;
-          case 'racing':   color = _kAmber;      break;
-          case 'dns':      color = _kTextMuted;  break;
-          case 'dnf':      color = _kRed;        break;
-          default:         color = _kTextSub;
-        }
-        return Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color:        color.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(10),
-            border:       Border.all(color: color.withOpacity(0.25)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
+    return Row(children: cards);
+  }
+
+  Widget _buildAnomalySummary(Map<String, dynamic> anomaly) {
+    final total      = anomaly['total_detected'] as int? ?? 0;
+    final resolved   = anomaly['resolved']       as int? ?? 0;
+    final unresolved = anomaly['unresolved']     as int? ?? 0;
+    final byType     = anomaly['by_type']        as Map<String, dynamic>? ?? {};
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _AnomalyStatCard(label: 'Total Detected', value: '$total',      color: _kAmber),
+            const SizedBox(width: 10),
+            _AnomalyStatCard(label: 'Resolved',       value: '$resolved',   color: _kGreen),
+            const SizedBox(width: 10),
+            _AnomalyStatCard(
+              label: 'Unresolved',
+              value: '$unresolved',
+              color: unresolved > 0 ? _kRed : _kTextMuted,
+            ),
+          ],
+        ),
+        if (byType.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          ...byType.entries.map((e) => _AnomalyTypeRow(
+            label: e.key,
+            count: (e.value as num?)?.toInt() ?? 0,
+            color: _kAmber,
+          )),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildSegmentExport() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color:        _kSurface,
+                borderRadius: BorderRadius.circular(8),
+                border:       Border.all(color: _kBorder),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value:         _selectedSegment,
+                  dropdownColor: _kSurface,
+                  style: const TextStyle(
+                      color: _kTextPri, fontSize: 13),
+                  items: ['all', 'competitive', 'recreational', 'casual']
+                      .map((s) => DropdownMenuItem(
+                            value: s,
+                            child: Text(_segmentDisplayName(s)),
+                          ))
+                      .toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() { _selectedSegment = val; });
+                    }
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            ElevatedButton(
+              onPressed: _loadingExport
+                  ? null
+                  : () => _loadSegment(_selectedSegment),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kGreen,
+                foregroundColor: Colors.black,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+              child: const Text(
+                'Load',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 16),
+
+        if (_loadingExport)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
+            ),
+          )
+        else if (_exportLoaded && _segmentRunners.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              'No runners in this segment.',
+              style: TextStyle(color: _kTextMuted, fontSize: 13),
+            ),
+          )
+        else if (_exportLoaded)
+          ..._segmentRunners
+              .map((r) => _ExportRunnerRow(runner: r)),
+      ],
+    );
+  }
+}
+
+// ── Section header ────────────────────────────────────────────────────────────
+
+class _SectionHeader extends StatelessWidget {
+  final String text;
+  const _SectionHeader(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: const TextStyle(
+        color:      _kTextPri,
+        fontSize:   14,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+  }
+}
+
+// ── Segment card ──────────────────────────────────────────────────────────────
+
+class _SegmentCard extends StatelessWidget {
+  final String segmentKey;
+  final int    count;
+  final String pace;
+  final Color  color;
+
+  const _SegmentCard({
+    required this.segmentKey,
+    required this.count,
+    required this.pace,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color:        color.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border:       Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
               Container(
                 width: 8, height: 8,
-                decoration: BoxDecoration(
-                    color: color, shape: BoxShape.circle),
+                decoration:
+                    BoxDecoration(color: color, shape: BoxShape.circle),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
-                e.key.toUpperCase(),
+                segmentKey.toUpperCase(),
                 style: TextStyle(
                   color:         color,
                   fontSize:      10,
-                  fontWeight:    FontWeight.w700,
+                  fontWeight:    FontWeight.w800,
                   letterSpacing: 0.4,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                '${e.value}',
-                style: const TextStyle(
-                  color:      _kTextPri,
-                  fontSize:   14,
-                  fontWeight: FontWeight.w800,
                 ),
               ),
             ],
           ),
-        );
-      }).toList(),
+          const SizedBox(height: 10),
+          Text(
+            '$count',
+            style: TextStyle(
+              color:         color,
+              fontSize:      22,
+              fontWeight:    FontWeight.w800,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const Text('runners',
+              style: TextStyle(color: _kTextMuted, fontSize: 11)),
+          const SizedBox(height: 6),
+          Text(
+            pace,
+            style: const TextStyle(
+              color:      _kTextSub,
+              fontSize:   12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const Text('avg pace',
+              style: TextStyle(color: _kTextMuted, fontSize: 10)),
+        ],
+      ),
     );
   }
+}
 
-  static List<_Bucket> _buildBuckets(List<int> times, double distKm) {
-    if (times.isEmpty || distKm <= 0) return [];
-    // Build 4–6 roughly equal time buckets based on data spread
-    final min = times.first;
-    final max = times.last;
-    if (min == max) {
-      return [_Bucket('${_fmtSecs(min)}', times.length, _kGreen)];
+// ── Export runner row ─────────────────────────────────────────────────────────
+
+class _ExportRunnerRow extends StatelessWidget {
+  final Map<String, dynamic> runner;
+  const _ExportRunnerRow({required this.runner});
+
+  @override
+  Widget build(BuildContext context) {
+    final rank    = runner['rank'] as int? ?? 0;
+    final bib     = runner['bib_number']?.toString() ?? '—';
+    final name    = runner['name']?.toString() ?? 'Unknown';
+    final pace    = runner['pace_formatted']?.toString() ?? '—';
+    final dist    = (runner['distance_km'] as num?)?.toStringAsFixed(2) ?? '—';
+    final segment = runner['segment']?.toString();
+    final segColor = _segmentColor(segment);
+
+    // finished_at is a UTC field — display in PHT (UTC+8).
+    final finishedAtRaw = runner['finished_at']?.toString();
+    String finishedTime = '—';
+    if (finishedAtRaw != null) {
+      try {
+        final dt = _toPhilippineTime(DateTime.parse(finishedAtRaw));
+        finishedTime =
+            '${dt.hour.toString().padLeft(2, '0')}:'
+            '${dt.minute.toString().padLeft(2, '0')}:'
+            '${dt.second.toString().padLeft(2, '0')}';
+      } catch (_) {}
     }
-    final span    = max - min;
-    final step    = (span / 5).ceil();
-    final buckets = <_Bucket>[];
-    final colors  = [_kGreen, _kBlue, _kAmber, _kPurple, _kRed];
-    for (var i = 0; i < 5; i++) {
-      final lo = min + step * i;
-      final hi = lo + step;
-      final count =
-          times.where((t) => t >= lo && (i == 4 ? t <= hi : t < hi)).length;
-      if (count == 0) continue;
-      final label =
-          '${_fmtSecs(lo)} – ${_fmtSecs(hi > max ? max : hi)}';
-      buckets.add(_Bucket(label, count, colors[i % colors.length]));
-    }
-    return buckets;
+
+    return Container(
+      margin:  const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color:        _kSurface,
+        borderRadius: BorderRadius.circular(10),
+        border:       Border.all(color: _kBorder),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 32,
+            child: Text(
+              '#$rank',
+              style: const TextStyle(
+                color:      _kTextMuted,
+                fontSize:   12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          SizedBox(
+            width: 50,
+            child: Text(
+              '#$bib',
+              style: const TextStyle(color: _kTextSub, fontSize: 11),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              name,
+              style: const TextStyle(
+                color:      _kTextPri,
+                fontSize:   13,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (segment != null) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+              decoration: BoxDecoration(
+                color:        segColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(4),
+                border:       Border.all(color: segColor.withOpacity(0.3)),
+              ),
+              child: Text(
+                _segmentLabel(segment),
+                style: TextStyle(
+                  color:         segColor,
+                  fontSize:      9,
+                  fontWeight:    FontWeight.w800,
+                  letterSpacing: 0.3,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 12),
+          Text(
+            finishedTime,
+            style: const TextStyle(color: _kTextSub, fontSize: 11),
+          ),
+          const SizedBox(width: 10),
+          Text(pace,
+              style: const TextStyle(color: _kTextMuted, fontSize: 11)),
+          const SizedBox(width: 10),
+          Text('${dist}km',
+              style: const TextStyle(color: _kTextMuted, fontSize: 11)),
+        ],
+      ),
+    );
   }
 }
 
-class _Bucket {
-  final String label;
-  final int    count;
-  final Color  color;
-  const _Bucket(this.label, this.count, this.color);
-}
+// ── Analytic card ─────────────────────────────────────────────────────────────
 
 class _AnalyticCard extends StatelessWidget {
   final String label;
@@ -961,9 +1287,9 @@ class _AnalyticCard extends StatelessWidget {
             Text(
               value,
               style: TextStyle(
-                color:      color,
-                fontSize:   20,
-                fontWeight: FontWeight.w800,
+                color:         color,
+                fontSize:      20,
+                fontWeight:    FontWeight.w800,
                 letterSpacing: -0.3,
               ),
             ),
@@ -977,57 +1303,6 @@ class _AnalyticCard extends StatelessWidget {
   }
 }
 
-class _PaceBar extends StatelessWidget {
-  final String label;
-  final int    count;
-  final int    total;
-  final Color  color;
-
-  const _PaceBar({
-    required this.label,
-    required this.count,
-    required this.total,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final frac = total > 0 ? count / total : 0.0;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(label,
-                    style: const TextStyle(
-                        color: _kTextSub, fontSize: 11)),
-              ),
-              Text(
-                '$count runner${count == 1 ? '' : 's'}',
-                style: const TextStyle(
-                    color: _kTextMuted, fontSize: 11),
-              ),
-            ],
-          ),
-          const SizedBox(height: 5),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value:            frac.toDouble(),
-              backgroundColor:  _kBorder,
-              valueColor:       AlwaysStoppedAnimation<Color>(color),
-              minHeight:        8,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ── Anomaly Report tab ────────────────────────────────────────────────────────
 
 class _AnomalyReportTab extends StatelessWidget {
@@ -1036,13 +1311,13 @@ class _AnomalyReportTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final total      = report['total'] as int? ?? 0;
-    final resolved   = report['resolved'] as int? ?? 0;
-    final unresolved = report['unresolved'] as int? ?? 0;
+    final total      = report['total']       as int? ?? 0;
+    final resolved   = report['resolved']    as int? ?? 0;
+    final unresolved = report['unresolved']  as int? ?? 0;
     final vSpeed     = report['vehicle_speed'] as int? ?? 0;
-    final gpsJump    = report['gps_jump'] as int? ?? 0;
-    final offRoute   = report['off_route'] as int? ?? 0;
-    final erratic    = report['erratic'] as int? ?? 0;
+    final gpsJump    = report['gps_jump']    as int? ?? 0;
+    final offRoute   = report['off_route']   as int? ?? 0;
+    final erratic    = report['erratic']     as int? ?? 0;
     final flagged    = (report['flagged_runners'] as List?) ?? [];
 
     return SingleChildScrollView(
@@ -1069,7 +1344,6 @@ class _AnomalyReportTab extends StatelessWidget {
 
           const SizedBox(height: 28),
 
-          // By type
           const Text(
             'By Type',
             style: TextStyle(
@@ -1204,9 +1478,9 @@ class _AnomalyStatCard extends StatelessWidget {
           children: [
             Text(value,
                 style: TextStyle(
-                  color:      color,
-                  fontSize:   22,
-                  fontWeight: FontWeight.w800,
+                  color:         color,
+                  fontSize:      22,
+                  fontWeight:    FontWeight.w800,
                   letterSpacing: -0.4,
                 )),
             const SizedBox(height: 2),

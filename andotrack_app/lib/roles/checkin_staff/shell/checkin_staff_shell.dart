@@ -14,6 +14,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:andotrack_app/core/services/api_service.dart';
+import 'package:andotrack_app/core/utils/date_utils.dart';
 import 'package:andotrack_app/features/auth/screens/login_screen.dart';
 import 'package:andotrack_app/roles/checkin_staff/screens/checkin_dashboard_screen.dart';
 
@@ -46,7 +47,7 @@ class _CheckinStaffShellState extends State<CheckinStaffShell> {
   Future<void> _init() async {
     final prefs = await SharedPreferences.getInstance();
     _userId = _readUserId(prefs);
-    if (mounted) setState(() => _userName = prefs.getString('user_name') ?? 'Staff');
+    _userName = prefs.getString('user_name') ?? 'Staff';
     await _loadRaces();
   }
 
@@ -237,16 +238,7 @@ class _CheckinTopBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          // Logo mark
-          Container(
-            width: 30, height: 30,
-            decoration: BoxDecoration(
-              color: _kGreen.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _kGreen.withOpacity(0.3)),
-            ),
-            child: const Icon(Icons.directions_run_rounded, color: _kGreen, size: 16),
-          ),
+          Image.asset('assets/images/favicon.png', width: 30, height: 30),
           const SizedBox(width: 10),
           const Text(
             'AndoTrack',
@@ -379,7 +371,7 @@ class _RaceCardState extends State<_RaceCard> {
   static String _formatDate(dynamic iso) {
     if (iso == null) return 'Date TBD';
     try {
-      final dt = DateTime.parse(iso.toString()).toLocal();
+      final dt = parsePht(iso.toString());
       const months = ['Jan','Feb','Mar','Apr','May','Jun',
                       'Jul','Aug','Sep','Oct','Nov','Dec'];
       final h = dt.hour.toString().padLeft(2, '0');

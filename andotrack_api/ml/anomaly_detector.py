@@ -1,21 +1,20 @@
 def determine_reason(features: list[float]) -> str:
     speed, acceleration, direction_change, dist_from_route, dist_from_last = features
 
-    if speed > 10:
-        return "Vehicle speed detected"
+    if speed > 4.5:
+        return "vehicle_speed"
     if dist_from_last > 200:
-        return "GPS jump detected"
-    if dist_from_route > 50:
-        return "Runner off route"
-    if acceleration > 3:
-        return "Sudden speed spike"
-    if direction_change > 120:
-        return "Erratic movement detected"
-    return "Unusual pattern detected"
+        return "gps_jump"
+    # ML flagged something we don't act on → suppress
+    return ""
 
 def run_anomaly_detection(model, features: list[float]) -> tuple[bool, str, float]:
     """
-    Returns (is_anomaly, reason, score)
+    Returns (is_anomaly, reason, score).
+    The ML model (IsolationForest) gates detection; determine_reason() maps the
+    flagged feature vector to an actionable label.  If the reason is empty the
+    anomaly is suppressed — is_anomaly is returned as False so the caller skips
+    saving/pushing.
     """
     import numpy as np
     X = np.array(features).reshape(1, -1)
@@ -25,4 +24,5 @@ def run_anomaly_detection(model, features: list[float]) -> tuple[bool, str, floa
     is_anomaly = prediction == -1
     reason = determine_reason(features) if is_anomaly else ""
 
-    return is_anomaly, reason, float(score)
+    # Suppress if ML fired but no actionable reason matched
+    return (is_anomaly and reason != ""), reason, float(score)
