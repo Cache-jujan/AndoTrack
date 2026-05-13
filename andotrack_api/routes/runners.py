@@ -42,12 +42,8 @@ else:
     print(f"⚠️ Model not found at: {os.path.abspath(_MODEL_PATH)}")
 
 _ANOMALY_COOLDOWN_SECS = 30
-_LOCATION_OFF_SECS = 60        # runner silent this long → location_off
-_LOCATION_OFF_COOLDOWN = 120   # re-alert at most every 2 min per silent runner
 # key: (race_id, runner_key) → epoch-seconds of last fired anomaly
 _anomaly_cooldown: dict[tuple[int, str], float] = {}
-# key: (race_id, runner_key) → epoch-seconds of last received ping
-_last_ping: dict[tuple[int, str], float] = {}
 
 router = APIRouter()
 
@@ -102,9 +98,7 @@ def update_location(
     if new_state is not None:
         new_state.prev_speed = body.speed
 
-    # ── Track ping time (used for location_off detection) ─────────────────
     now_ts = time.time()
-    _last_ping[(body.race_id, runner_key)] = now_ts
 
     # ── ML anomaly detection (vehicle_speed / gps_jump only) ──────────────
     anomaly_result = None
@@ -141,28 +135,6 @@ def update_location(
                 import traceback
                 traceback.print_exc()
 
-    # ── Location-off detection (rule-based, no ML) ─────────────────────────
-    for (r_id, r_key), last_t in _last_ping.items():
-        if r_id != body.race_id or r_key == runner_key:
-            continue
-        if (now_ts - last_t) >= _LOCATION_OFF_SECS:
-            off_key = (r_id, r_key)
-            if (now_ts - _anomaly_cooldown.get(off_key, 0.0)) >= _LOCATION_OFF_COOLDOWN:
-                _anomaly_cooldown[off_key] = now_ts
-                silent_pos = get_last_position(r_id, r_key)
-                if silent_pos:
-                    try:
-                        save_and_push_anomaly(
-                            db=db,
-                            runner_id=int(r_key),
-                            race_id=r_id,
-                            reason="location_off",
-                            score=1.0,
-                            lat=silent_pos[0],
-                            lng=silent_pos[1],
-                        )
-                    except Exception as e:
-                        print(f"LOCATION_OFF ERROR: {e}")
 
     return {
         "runner_id":  runner_id,

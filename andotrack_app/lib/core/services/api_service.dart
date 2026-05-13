@@ -624,16 +624,32 @@ class ApiService {
       final resolved   = all.where((a) => a['resolved'] == true).length;
       final unresolved = all.length - resolved;
       final counts = <String, int>{};
-      for (final a in all) { counts[a['reason']?.toString() ?? 'unknown'] = (counts[a['reason']?.toString() ?? 'unknown'] ?? 0) + 1; }
+      for (final a in all) {
+        final reason = a['reason']?.toString() ?? 'unknown';
+        counts[reason] = (counts[reason] ?? 0) + 1;
+      }
+      // Group by runner to produce flagged_runners list of Maps
+      final runnerGroups = <dynamic, Map<String, dynamic>>{};
+      for (final a in all) {
+        final rid = a['runner_id'];
+        runnerGroups.putIfAbsent(rid, () => {
+          'runner_id':    rid,
+          'name':         a['runner_name']?.toString() ?? 'Runner #$rid',
+          'bib_number':   '—',
+          'anomaly_count': 0,
+        });
+        runnerGroups[rid]!['anomaly_count'] =
+            (runnerGroups[rid]!['anomaly_count'] as int) + 1;
+      }
       return {
-        'total':         all.length,
-        'vehicle_speed': counts['vehicle_speed'] ?? 0,
-        'gps_jump':      counts['gps_jump'] ?? 0,
-        'off_route':     counts['off_route'] ?? 0,
-        'erratic':       counts['erratic'] ?? 0,
-        'resolved':      resolved,
-        'unresolved':    unresolved,
-        'flagged_runners': all.map((a) => a['runner_id']).toSet().toList(),
+        'total':           all.length,
+        'vehicle_speed':   counts['vehicle_speed'] ?? 0,
+        'gps_jump':        counts['gps_jump'] ?? 0,
+        'off_route':       counts['off_route'] ?? 0,
+        'erratic':         counts['erratic'] ?? 0,
+        'resolved':        resolved,
+        'unresolved':      unresolved,
+        'flagged_runners': runnerGroups.values.toList(),
       };
     }
     throw ApiException('Could not load anomaly report.');
