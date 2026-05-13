@@ -30,6 +30,10 @@ def compute_analytics(results: list, race_runners: list, race) -> dict:
     Computes the full analytics payload for GET /races/{race_id}/analytics.
     Called on every read — nothing extra is stored.
     """
+    # Recompute segments in-memory for any result missing a stored segment
+    # (covers races finished before segmentation was added)
+    if results and any(r.segment is None for r in results):
+        assign_segments(results)
     total_registered = len(race_runners)
     total_checkedin  = sum(1 for rr in race_runners if rr.is_present)
     total_finishers  = len(results)
