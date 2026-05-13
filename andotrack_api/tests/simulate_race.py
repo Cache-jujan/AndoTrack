@@ -124,7 +124,7 @@ CHECKPOINT_DEFS = [
     for i in range(len(WAYPOINTS))
 ]
 
-ROUNDS      = 10
+ROUNDS      = 5
 ROUND_SLEEP = 2   # seconds between rounds
 
 
@@ -243,12 +243,12 @@ if len(runners) < 3:
     print("  ❌ Not enough runners — aborting")
     sys.exit(1)
 
-# Runner A = first competitive (vehicle_speed injection, round 3)
-# Runner B = first recreational (gps_jump injection, round 6)
+# Runner A = first competitive (vehicle_speed injection, round 2)
+# Runner B = first recreational (gps_jump injection, round 4)
 runner_a_id = runners[0]["runner_id"]   # Carlos Reyes
 runner_b_id = runners[2]["runner_id"]   # Ana Garcia
-print(f"\n       Runner A (vehicle_speed, round 3):  {runners[0]['name']}")
-print(f"       Runner B (gps_jump,      round 6):  {runners[2]['name']}")
+print(f"\n       Runner A (vehicle_speed, round 2):  {runners[0]['name']}")
+print(f"       Runner B (gps_jump,      round 4):  {runners[2]['name']}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -311,26 +311,27 @@ for round_num in range(1, ROUNDS + 1):
 
         rid = runner["runner_id"]
 
-        if rid == runner_a_id and round_num == 3:
-            # Anomaly: vehicle speed — normal position, impossible speed
+        if rid == runner_a_id and round_num == 2:
+            # Anomaly: vehicle speed — ping at current position, impossible speed
             lat, lng = pos_at(runner["cum_dist"])
             speed    = 22.0
-            runner["cum_dist"] = min(runner["cum_dist"] + runner["dist_per_round"], ROUTE_LEN_M)
             print(f"     🚨 ANOMALY  vehicle_speed  {runner['name']}  speed={speed} m/s")
 
-        elif rid == runner_b_id and round_num == 6:
+        elif rid == runner_b_id and round_num == 4:
             # Anomaly: GPS jump — 0.003° north (~333 m off-route, >> 200 m threshold)
             cur_lat, cur_lng = pos_at(runner["cum_dist"])
             lat  = round(cur_lat + 0.003, 6)
             lng  = cur_lng
             speed = runner["speed"]
-            runner["cum_dist"] = min(runner["cum_dist"] + runner["dist_per_round"], ROUTE_LEN_M)
             print(f"     🚨 ANOMALY  gps_jump       {runner['name']}  +333 m off-route")
 
         else:
-            runner["cum_dist"] = min(runner["cum_dist"] + runner["dist_per_round"], ROUTE_LEN_M)
+            # Ping at current position FIRST (so round 1 shows runners at Start Line)
             lat, lng = pos_at(runner["cum_dist"])
             speed    = runner["speed"] + random.uniform(-0.1, 0.1)
+
+        # Advance position after ping
+        runner["cum_dist"] = min(runner["cum_dist"] + runner["dist_per_round"], ROUTE_LEN_M)
 
         r = requests.post(
             f"{BASE}/runners/{rid}/location",

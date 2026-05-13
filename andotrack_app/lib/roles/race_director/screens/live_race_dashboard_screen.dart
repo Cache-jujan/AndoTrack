@@ -243,23 +243,28 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
     setState(() => _stoppingRace = true);
     try {
       await ApiService.stopRace(_raceId);
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-            builder: (_) => PostRaceScreen(race: widget.race)),
-      );
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _stoppingRace = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Failed to stop race: $e'),
-        backgroundColor: _kRed,
-        behavior: SnackBarBehavior.floating,
-        margin: const EdgeInsets.all(16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
+      final msg = e.toString().toLowerCase();
+      // "already finished" means the simulation script ended the race — navigate anyway
+      if (!msg.contains('finish') && !msg.contains('already')) {
+        if (!mounted) return;
+        setState(() => _stoppingRace = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to stop race: $e'),
+          backgroundColor: _kRed,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
     }
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => PostRaceScreen(race: widget.race)),
+    );
   }
 
   Future<void> _resolveAnomaly(int anomalyId) async {
@@ -712,7 +717,6 @@ class _AnomalyCard extends StatelessWidget {
     switch (type) {
       case 'vehicle_speed': return 'VEHICLE SPEED';
       case 'gps_jump':      return 'GPS JUMP';
-      case 'location_off':  return 'LOCATION OFF';
       default:              return type.toUpperCase().replaceAll('_', ' ');
     }
   }
