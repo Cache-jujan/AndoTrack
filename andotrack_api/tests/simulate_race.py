@@ -191,8 +191,8 @@ header("Step 4 — Register 10 Runners (2 competitive / 5 recreational / 3 casua
 runners = []
 
 for profile_type, speed, dist_per_round, name in _RUNNER_DEFS:
-    uid      = random.randint(10_000, 99_999)
-    email    = f"runner_{uid}@andotrack.com"
+    # Name-based email: always the same account for the same runner name across runs
+    email    = f"runner.{name.lower().replace(' ', '.')}@andotrack.com"
     password = "runner123"
 
     r = requests.post(f"{BASE}/auth/register", json={
