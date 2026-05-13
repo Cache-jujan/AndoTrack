@@ -243,18 +243,12 @@ if len(runners) < 3:
     print("  ❌ Not enough runners — aborting")
     sys.exit(1)
 
-# Stagger starting positions so runner dots are spread across route from round 1
-STAGGER_M = ROUTE_LEN_M * 0.4  # spread across first 40% of route
-for i, runner in enumerate(runners):
-    runner["cum_dist"] = round((i / (len(runners) - 1)) * STAGGER_M, 1)
-
 # Runner A = first competitive (vehicle_speed injection, round 3)
 # Runner B = first recreational (gps_jump injection, round 6)
 runner_a_id = runners[0]["runner_id"]   # Carlos Reyes
 runner_b_id = runners[2]["runner_id"]   # Ana Garcia
 print(f"\n       Runner A (vehicle_speed, round 3):  {runners[0]['name']}")
 print(f"       Runner B (gps_jump,      round 6):  {runners[2]['name']}")
-print(f"\n       Starting positions staggered: 0 m → {STAGGER_M:.1f} m")
 
 
 # ═══════════════════════════════════════════════════════════════════
