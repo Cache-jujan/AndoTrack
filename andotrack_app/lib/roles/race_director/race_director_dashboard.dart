@@ -556,7 +556,8 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
           ]),
 
         CircleLayer(
-          circles: _checkpoints.map((cp) => CircleMarker(
+          // Reversed so lower-order checkpoints render on top at shared coords
+          circles: _checkpoints.reversed.map((cp) => CircleMarker(
             point: LatLng(
               (cp['lat'] as num).toDouble(),
               (cp['lng'] as num).toDouble(),
@@ -570,17 +571,20 @@ class _OrganizerDashboardState extends State<OrganizerDashboard>
         ),
 
         MarkerLayer(markers: [
-          // Checkpoint pins
-          ..._checkpoints.asMap().entries.map((e) => Marker(
-            point: LatLng(
-              (e.value['lat'] as num).toDouble(),
-              (e.value['lng'] as num).toDouble(),
-            ),
-            width: 56, height: 60,
-            child: _CheckpointPin(
-                index: e.key + 1,
-                name:  e.value['name']?.toString() ?? ''),
-          )),
+          // Checkpoint pins — reversed so CP1 renders on top of CP5 at shared coords
+          ..._checkpoints.reversed.toList().asMap().entries.map((e) {
+            final order = _checkpoints.length - e.key; // CP1=1, CP2=2 …
+            return Marker(
+              point: LatLng(
+                (e.value['lat'] as num).toDouble(),
+                (e.value['lng'] as num).toDouble(),
+              ),
+              width: 56, height: 60,
+              child: _CheckpointPin(
+                  index: order,
+                  name:  e.value['name']?.toString() ?? ''),
+            );
+          }),
 
           // Runner dots (smoothed)
           ..._smoothPositions.entries.map((e) {
