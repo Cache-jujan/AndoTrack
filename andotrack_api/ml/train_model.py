@@ -24,14 +24,26 @@ normal = pd.DataFrame({
 n = 300
 anomalies = pd.DataFrame({
     'speed': np.concatenate([
-        np.random.uniform(12, 30, 100),
-        np.random.uniform(0, 0.5, 100),
-        np.random.uniform(5, 8, 100),
+        np.random.uniform(12, 35, 100),   # vehicle: high speed
+        np.random.uniform(0, 0.5, 100),   # stopped / GPS glitch
+        np.random.uniform(5, 8, 100),     # borderline fast
     ]),
     'acceleration': np.random.uniform(1.5, 5.0, n),
-    'direction_change': np.random.uniform(80, 180, n),
-    'dist_from_route': np.random.uniform(30, 200, n),
-    'dist_from_last': np.random.uniform(50, 500, n),
+    # Vehicle anomalies can go straight (low dir_change) or erratically;
+    # GPS glitches have arbitrary direction — allow full 0-180 range.
+    'direction_change': np.concatenate([
+        np.random.uniform(0, 180, 100),   # vehicle: any heading (car on route = 0)
+        np.random.uniform(80, 180, 100),  # stopped / glitch: erratic
+        np.random.uniform(80, 180, 100),  # borderline: erratic
+    ]),
+    'dist_from_route': np.random.uniform(0, 200, n),
+    # Lower bound 30 m — matches simulation where competitive runners advance
+    # ~40 m per round, so a vehicle ping at that cadence lands here.
+    'dist_from_last': np.concatenate([
+        np.random.uniform(30, 500, 100),  # vehicle
+        np.random.uniform(50, 500, 100),  # glitch
+        np.random.uniform(50, 500, 100),  # borderline
+    ]),
     'label': 1
 })
 
@@ -63,7 +75,8 @@ tests = [
     ("Normal runner 3 m/s",           [3.0,  0.1,  5.0,   2.0,   8.0],    1),
     ("Normal runner 4 m/s",           [4.0,  0.08, 3.0,   1.5,   9.0],    1),
     ("Slow walker 1.5 m/s",           [1.5,  0.05, 3.0,   1.0,   6.0],    1),
-    ("Vehicle speed 25 m/s",          [25.0, 4.5,  160.0, 150.0, 400.0],  -1),
+    ("Vehicle speed 25 m/s (erratic)", [25.0, 4.5,  160.0, 150.0, 400.0],  -1),
+    ("Vehicle speed 22 m/s (straight)",[22.0, 3.4,    0.0,  40.0,  40.0],  -1),
     ("Vehicle speed 15 m/s",          [15.0, 3.5,  100.0, 80.0,  200.0],  -1),
     ("GPS jump 200m",                 [3.0,  0.1,  5.0,   2.0,   200.0],  -1),
     ("Off route 100m",                [3.0,  0.1,  5.0,   100.0, 8.0],    -1),

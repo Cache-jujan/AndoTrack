@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime
+from sqlalchemy import Column, Double, Integer, String, Float, Boolean, DateTime
 from database import Base
 import datetime
 
@@ -10,6 +10,6 @@ class Anomaly(Base):
     detected_at = Column(DateTime, default=datetime.datetime.utcnow)
     reason = Column(String(255))
     score = Column(Float)
-    lat = Column(Float)
-    lng = Column(Float)
+    lat = Column(Double)
+    lng = Column(Double)
     resolved = Column(Boolean, default=False)
