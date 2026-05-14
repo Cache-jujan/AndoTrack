@@ -43,6 +43,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
   List<Map<String, dynamic>> _runners     = [];
   List<Map<String, dynamic>> _checkpoints = [];
   List<Map<String, dynamic>> _anomalies   = [];
+  List<Map<String, dynamic>> _leaderboard = [];
 
   // ── UI state ──────────────────────────────────────────────────────────────
   bool    _bottomExpanded = true;
@@ -130,6 +131,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
         ApiService.getRaceRunners(_raceId),
         ApiService.getCheckpoints(_raceId),
         ApiService.getAnomalies(_raceId),
+        ApiService.getLeaderboard(_raceId),
       ]);
       if (!mounted) return;
       setState(() {
@@ -139,6 +141,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
         _anomalies   = results[2]
             .where((a) => a['resolved'] != true)
             .toList();
+        _leaderboard = results[3];
         _pollError = null;
       });
       // Move map to course centroid on first successful checkpoint load.
@@ -312,6 +315,7 @@ class _LiveRaceDashboardScreenState extends State<LiveRaceDashboardScreen> {
                     ],
                   ),
                 ),
+                _LeaderboardSidebar(leaderboard: _leaderboard),
               ],
             ),
           ),
@@ -1041,6 +1045,174 @@ class _RunnerDetailDialog extends StatelessWidget {
       ],
     ),
   );
+}
+
+// ── Leaderboard sidebar ───────────────────────────────────────────────────────
+
+const _kGold   = Color(0xFFFFD700);
+const _kSilver = Color(0xFFC0C0C0);
+const _kBronze = Color(0xFFCD7F32);
+
+class _LeaderboardSidebar extends StatelessWidget {
+  final List<Map<String, dynamic>> leaderboard;
+  const _LeaderboardSidebar({required this.leaderboard});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 220,
+      decoration: const BoxDecoration(
+        color:  _kSurface,
+        border: Border(left: BorderSide(color: _kBorder)),
+      ),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+            child: Row(
+              children: [
+                const Icon(Icons.emoji_events_rounded,
+                    size: 14, color: _kGold),
+                const SizedBox(width: 8),
+                const Flexible(
+                  child: Text(
+                    'Live Rankings',
+                    style: TextStyle(
+                      color:      _kTextPri,
+                      fontSize:   12,
+                      fontWeight: FontWeight.w700,
+                      overflow:   TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color:        _kGreen.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: _kGreen.withValues(alpha: 0.30)),
+                  ),
+                  child: Text(
+                    '${leaderboard.length}',
+                    style: const TextStyle(
+                      color:      _kGreen,
+                      fontSize:   10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(color: _kBorder, height: 1),
+          Expanded(
+            child: leaderboard.isEmpty
+                ? const Center(
+                    child: Text('No data yet',
+                        style: TextStyle(
+                            color: _kTextMuted, fontSize: 11)))
+                : ListView.builder(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    itemCount: leaderboard.length,
+                    itemBuilder: (_, i) {
+                      final e    = leaderboard[i];
+                      final rank = (e['rank'] as int?) ?? (i + 1);
+                      final name = e['name']?.toString()
+                          ?? e['runner_name']?.toString()
+                          ?? 'Unknown';
+                      final dist = (e['distance_km'] as num?);
+                      final pace = e['pace_formatted']?.toString() ?? '—';
+                      final isFinished =
+                          e['race_status']?.toString() == 'finished';
+
+                      Color rankColor;
+                      switch (rank) {
+                        case 1: rankColor = _kGold;   break;
+                        case 2: rankColor = _kSilver; break;
+                        case 3: rankColor = _kBronze; break;
+                        default: rankColor = _kTextMuted;
+                      }
+
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                                color: _kBorder.withValues(alpha: 0.5)),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 28,
+                              child: rank <= 3
+                                  ? Container(
+                                      width: 22, height: 22,
+                                      decoration: BoxDecoration(
+                                        color: rankColor
+                                            .withValues(alpha: 0.15),
+                                        shape:  BoxShape.circle,
+                                        border: Border.all(
+                                            color: rankColor
+                                                .withValues(alpha: 0.5)),
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text('$rank',
+                                          style: TextStyle(
+                                            color:      rankColor,
+                                            fontSize:   9,
+                                            fontWeight: FontWeight.w800,
+                                          )),
+                                    )
+                                  : Text('$rank',
+                                      style: const TextStyle(
+                                          color: _kTextMuted,
+                                          fontSize: 11)),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(name,
+                                      style: const TextStyle(
+                                        color:      _kTextPri,
+                                        fontSize:   11,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                      overflow: TextOverflow.ellipsis),
+                                  Text(
+                                    isFinished
+                                        ? 'Finished · $pace'
+                                        : dist != null
+                                            ? '${dist.toStringAsFixed(2)} km · $pace'
+                                            : pace,
+                                    style: TextStyle(
+                                      color:    isFinished
+                                          ? _kGreen
+                                          : _kTextSub,
+                                      fontSize: 10,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ── Poll error chip ───────────────────────────────────────────────────────────
