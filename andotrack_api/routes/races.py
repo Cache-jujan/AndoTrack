@@ -495,6 +495,28 @@ def get_race_runners(
     return result
 
 
+@router.get("/{race_id}/runners/public")
+def get_race_runners_public(race_id: int, db: Session = Depends(get_db)):
+    """No-auth endpoint — returns only non-sensitive fields for the public dashboard."""
+    race = db.query(Race).filter(Race.id == race_id).first()
+    if not race:
+        raise HTTPException(status_code=404, detail="Race not found.")
+
+    race_runners = db.query(RaceRunner).filter(RaceRunner.race_id == race_id).all()
+    result = []
+    for rr in race_runners:
+        runner = db.query(User).filter(User.id == rr.runner_id).first()
+        if runner:
+            result.append({
+                "user_id":     runner.id,
+                "name":        runner.name,
+                "bib_number":  getattr(rr, "bib_number", None),
+                "race_status": getattr(rr, "race_status", None),
+                "is_present":  rr.is_present,
+            })
+    return result
+
+
 # ── Anomalies ─────────────────────────────────────────────────────────────────
 
 @router.get("/{race_id}/anomalies")

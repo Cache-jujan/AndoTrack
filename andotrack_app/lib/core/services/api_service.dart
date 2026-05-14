@@ -353,30 +353,25 @@ class ApiService {
     throw Exception('Failed to load races (${res.statusCode})');
   }
 
-  static Future<List<Map<String, dynamic>>> getPublicRaceRunners(
-      int raceId) async {
+  /// Returns registered-runner count from the public (no-auth) lite endpoint.
+  static Future<int> getPublicRaceRunnerCount(int raceId) async {
     try {
       final res = await http.get(
-        Uri.parse('$_base/races/$raceId/runners'),
+        Uri.parse('$_base/races/$raceId/runners/public'),
         headers: {'Content-Type': 'application/json'},
       );
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        if (decoded is List) return decoded.cast<Map<String, dynamic>>();
-        if (decoded is Map<String, dynamic>) {
-          final list = decoded['runners'] as List?
-              ?? decoded['registrations'] as List?
-              ?? decoded['data'] as List? ?? [];
-          return list.cast<Map<String, dynamic>>();
-        }
+        if (decoded is List) return decoded.length;
       }
-      return [];
+      return 0;
     } catch (_) {
-      return [];
+      return 0;
     }
   }
 
-  static Future<List<Map<String, dynamic>>> getPublicLeaderboard(
+  /// Returns both `finished` and `racing` lists from the public leaderboard.
+  static Future<Map<String, List<Map<String, dynamic>>>> getPublicLeaderboard(
       int raceId) async {
     try {
       final res = await http.get(
@@ -385,19 +380,17 @@ class ApiService {
       );
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
-        if (decoded is List) return decoded.cast<Map<String, dynamic>>();
         if (decoded is Map<String, dynamic>) {
-          final finished =
-              (decoded['finished'] as List?)?.cast<Map<String, dynamic>>() ?? [];
-          if (finished.isNotEmpty) return finished;
-          return (decoded['racing'] as List?)
-                  ?.cast<Map<String, dynamic>>() ?? [];
+          return {
+            'finished': (decoded['finished'] as List?)
+                    ?.cast<Map<String, dynamic>>() ?? [],
+            'racing':   (decoded['racing']   as List?)
+                    ?.cast<Map<String, dynamic>>() ?? [],
+          };
         }
       }
-      return [];
-    } catch (_) {
-      return [];
-    }
+    } catch (_) {}
+    return {'finished': [], 'racing': []};
   }
 
   // ── Profile ───────────────────────────────────────────────────────────────

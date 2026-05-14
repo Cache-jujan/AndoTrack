@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
-from utils.dependencies import get_current_user
 from utils.distance_tracker import get_all_runners_distance
 from utils.pace import get_runner_pace_summary
 from utils.eta import calculate_eta
@@ -17,7 +16,6 @@ router = APIRouter()
 def get_leaderboard(
     race_id: int,
     db: Session = Depends(get_db),
-    user=Depends(get_current_user),
 ):
     # ── 1. Verify race exists ─────────────────────────────────────────────
     race = db.query(Race).filter(Race.id == race_id).first()

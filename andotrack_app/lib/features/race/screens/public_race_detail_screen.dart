@@ -36,34 +36,32 @@ class PublicRaceDetailScreen extends StatefulWidget {
 }
 
 class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
-  List<Map<String, dynamic>> _runners     = [];
-  List<Map<String, dynamic>> _leaderboard = [];
-  bool    _loading = true;
+  // ── State ──────────────────────────────────────────────────────────────────
+  List<Map<String, dynamic>> _racingRunners   = [];
+  List<Map<String, dynamic>> _finishedRunners = [];
+  int     _registeredCount = 0;
+  bool    _loading         = true;
   String? _error;
-  Timer?  _timer;
+  Timer?  _pollTimer;
+  Timer?  _clockTimer;
+  DateTime? _lastUpdated;
 
   int get _raceId => (widget.race['id'] as num).toInt();
-
-  // ── Computed stats ─────────────────────────────────────────────────────────
-
-  int get _registered => _runners.length;
-
-  int get _racing => _runners.where((r) {
-    final s = r['race_status']?.toString() ?? r['status']?.toString() ?? '';
-    return s == 'active' || s == 'racing';
-  }).length;
-
-  int get _finished => _leaderboard.length;
 
   double get _distKm =>
       (widget.race['distance_km'] as num?)?.toDouble() ?? 0;
 
-  List<Map<String, dynamic>> get _activeRunners =>
-      _runners.where((r) {
-        final s = r['race_status']?.toString()
-            ?? r['status']?.toString() ?? '';
-        return s == 'active' || s == 'racing' || r['is_present'] == true;
-      }).toList();
+  // Active runners panel shows the racing list (already has dist + pace)
+  List<Map<String, dynamic>> get _activeRunners => _racingRunners;
+
+  // Leaderboard panel shows finished runners; falls back to racing by distance
+  List<Map<String, dynamic>> get _leaderboardRows =>
+      _finishedRunners.isNotEmpty
+          ? _finishedRunners
+          : List.of(_racingRunners)
+            ..sort((a, b) =>
+                ((b['distance_km'] as num?) ?? 0)
+                    .compareTo((a['distance_km'] as num?) ?? 0));
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -71,33 +69,49 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
   void initState() {
     super.initState();
     _loadAll();
-    _timer = Timer.periodic(
-      const Duration(seconds: 10),
-      (_) => _loadAll(),
-    );
+    _pollTimer = Timer.periodic(const Duration(seconds: 5), (_) => _loadAll());
+    // Tick every second so the "X s ago" badge stays current
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted && _lastUpdated != null) setState(() {});
+    });
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _pollTimer?.cancel();
+    _clockTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _loadAll() async {
     try {
-      final runners     = await ApiService.getPublicRaceRunners(_raceId);
-      final leaderboard = await ApiService.getPublicLeaderboard(_raceId);
+      final results = await Future.wait([
+        ApiService.getPublicLeaderboard(_raceId),
+        ApiService.getPublicRaceRunnerCount(_raceId),
+      ]);
+      final lb    = results[0] as Map<String, List<Map<String, dynamic>>>;
+      final count = results[1] as int;
       if (!mounted) return;
       setState(() {
-        _runners     = runners;
-        _leaderboard = leaderboard;
-        _loading     = false;
-        _error       = null;
+        _racingRunners   = lb['racing']   ?? [];
+        _finishedRunners = lb['finished'] ?? [];
+        _registeredCount = count;
+        _loading         = false;
+        _error           = null;
+        _lastUpdated     = DateTime.now();
       });
     } catch (e) {
       if (!mounted) return;
       if (_loading) setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  String _updatedLabel() {
+    if (_lastUpdated == null) return 'Updating…';
+    final secs = DateTime.now().difference(_lastUpdated!).inSeconds;
+    if (secs < 5)  return 'Updated just now';
+    if (secs < 60) return 'Updated ${secs}s ago';
+    return 'Updated ${(secs / 60).floor()}m ago';
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -112,8 +126,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
           if (_loading)
             const Expanded(
               child: Center(
-                child: CircularProgressIndicator(
-                    color: _kGreen, strokeWidth: 2),
+                child: CircularProgressIndicator(color: _kGreen, strokeWidth: 2),
               ),
             )
           else if (_error != null)
@@ -155,15 +168,11 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
         children: [
           TextButton.icon(
             onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back_rounded,
-                size: 16, color: _kTextSub),
-            label: const Text(
-              'All Races',
-              style: TextStyle(color: _kTextSub, fontSize: 13),
-            ),
+            icon: const Icon(Icons.arrow_back_rounded, size: 16, color: _kTextSub),
+            label: const Text('All Races',
+                style: TextStyle(color: _kTextSub, fontSize: 13)),
             style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-            ),
+                padding: const EdgeInsets.symmetric(horizontal: 8)),
           ),
           Expanded(
             child: Text(
@@ -178,12 +187,11 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
             ),
           ),
           Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 8, vertical: 3),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color:        statusColor.withOpacity(0.12),
+              color:        statusColor.withValues(alpha:0.12),
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: statusColor.withOpacity(0.35)),
+              border: Border.all(color: statusColor.withValues(alpha:0.35)),
             ),
             child: Text(
               statusLabel,
@@ -207,17 +215,24 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
       child: Row(
         children: [
-          _StatCard(label: 'REGISTERED', value: '$_registered', color: _kBlue),
+          _StatCard(
+              label: 'REGISTERED',
+              value: '$_registeredCount',
+              color: _kBlue),
           const SizedBox(width: 10),
-          _StatCard(label: 'RACING',     value: '$_racing',     color: _kAmber),
+          _StatCard(
+              label: 'RACING',
+              value: '${_racingRunners.length}',
+              color: _kAmber),
           const SizedBox(width: 10),
-          _StatCard(label: 'FINISHED',   value: '$_finished',   color: _kGreen),
+          _StatCard(
+              label: 'FINISHED',
+              value: '${_finishedRunners.length}',
+              color: _kGreen),
           const SizedBox(width: 10),
           _StatCard(
             label: 'DISTANCE',
-            value: _distKm > 0
-                ? '${_distKm.toStringAsFixed(0)} km'
-                : '—',
+            value: _distKm > 0 ? '${_distKm.toStringAsFixed(0)} km' : '—',
             color: _kPurple,
           ),
         ],
@@ -251,7 +266,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
         border:       Border.all(color: _kBorder),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
@@ -260,12 +275,15 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                 const Icon(Icons.people_outline_rounded,
                     size: 14, color: _kTextSub),
                 const SizedBox(width: 8),
-                const Text(
-                  'Active Runners',
-                  style: TextStyle(
-                    color:      _kTextPri,
-                    fontSize:   13,
-                    fontWeight: FontWeight.w700,
+                const Flexible(
+                  child: Text(
+                    'Active Runners',
+                    style: TextStyle(
+                      color:      _kTextPri,
+                      fontSize:   13,
+                      fontWeight: FontWeight.w700,
+                      overflow:   TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -273,9 +291,9 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color:        _kAmber.withOpacity(0.12),
+                    color:        _kAmber.withValues(alpha:0.12),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _kAmber.withOpacity(0.35)),
+                    border: Border.all(color: _kAmber.withValues(alpha:0.35)),
                   ),
                   child: Text(
                     '${_activeRunners.length}',
@@ -291,18 +309,17 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
           ),
           const Divider(color: _kBorder, height: 1),
           Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 8),
-            color: _kBorder.withOpacity(0.3),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: _kBorder.withValues(alpha:0.3),
             child: const Row(
               children: [
-                SizedBox(width: 50,
-                    child: Text('BIB', style: _hdr)),
+                SizedBox(width: 32,
+                    child: Text('RNK', style: _hdr)),
                 Expanded(child: Text('NAME', style: _hdr)),
                 SizedBox(width: 70,
                     child: Text('DIST', style: _hdr,
                         textAlign: TextAlign.right)),
-                SizedBox(width: 80,
+                SizedBox(width: 72,
                     child: Text('PACE', style: _hdr,
                         textAlign: TextAlign.right)),
               ],
@@ -312,28 +329,27 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
             child: _activeRunners.isEmpty
                 ? const Center(
                     child: Text('No active runners',
-                        style: TextStyle(
-                            color: _kTextMuted, fontSize: 12)))
+                        style: TextStyle(color: _kTextMuted, fontSize: 12)))
                 : ListView.builder(
                     itemCount: _activeRunners.length,
                     itemBuilder: (_, i) {
                       final r    = _activeRunners[i];
-                      final bib  = r['bib_number']?.toString() ?? '—';
+                      final rank = (r['rank'] as int?) ?? (i + 1);
                       final name = r['name']?.toString() ?? 'Unknown';
-                      final dist = r['distance_covered_km'] as num?;
+                      final dist = (r['distance_km'] as num?);
                       final pace = r['pace_formatted']?.toString();
                       return Container(
                         color: i.isEven
-                            ? Colors.white.withOpacity(0.01)
+                            ? Colors.white.withValues(alpha:0.01)
                             : Colors.transparent,
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 9),
                         child: Row(
                           children: [
                             SizedBox(
-                              width: 50,
+                              width: 32,
                               child: Text(
-                                '#$bib',
+                                '$rank',
                                 style: const TextStyle(
                                   color:      _kBlue,
                                   fontSize:   11,
@@ -342,18 +358,16 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                               ),
                             ),
                             Expanded(
-                              child: Text(
-                                name,
-                                style: const TextStyle(
-                                    color: _kTextPri, fontSize: 12),
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                              child: Text(name,
+                                  style: const TextStyle(
+                                      color: _kTextPri, fontSize: 12),
+                                  overflow: TextOverflow.ellipsis),
                             ),
                             SizedBox(
                               width: 70,
                               child: Text(
                                 dist != null
-                                    ? '${dist.toStringAsFixed(1)} km'
+                                    ? '${dist.toStringAsFixed(2)} km'
                                     : '—',
                                 style: const TextStyle(
                                     color: _kGreen, fontSize: 11),
@@ -361,7 +375,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                               ),
                             ),
                             SizedBox(
-                              width: 80,
+                              width: 72,
                               child: Text(
                                 pace ?? '—',
                                 style: const TextStyle(
@@ -383,6 +397,9 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
   // ── Right: Live leaderboard ────────────────────────────────────────────────
 
   Widget _buildLeaderboardPanel() {
+    final rows     = _leaderboardRows;
+    final isLive   = _finishedRunners.isEmpty;
+
     return Container(
       decoration: BoxDecoration(
         color:        _kSurface,
@@ -390,7 +407,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
         border:       Border.all(color: _kBorder),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
@@ -399,12 +416,15 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                 const Icon(Icons.emoji_events_rounded,
                     size: 16, color: _kAmber),
                 const SizedBox(width: 8),
-                const Text(
-                  'Live Leaderboard',
-                  style: TextStyle(
-                    color:      _kTextPri,
-                    fontSize:   13,
-                    fontWeight: FontWeight.w700,
+                Flexible(
+                  child: Text(
+                    isLive ? 'Live Rankings' : 'Leaderboard',
+                    style: const TextStyle(
+                      color:      _kTextPri,
+                      fontSize:   13,
+                      fontWeight: FontWeight.w700,
+                      overflow:   TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -412,12 +432,12 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color:        _kGreen.withOpacity(0.10),
+                    color:        _kGreen.withValues(alpha:0.10),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: _kGreen.withOpacity(0.30)),
+                    border: Border.all(color: _kGreen.withValues(alpha:0.30)),
                   ),
                   child: Text(
-                    '${_leaderboard.length}',
+                    '${rows.length}',
                     style: const TextStyle(
                       color:      _kGreen,
                       fontSize:   10,
@@ -430,17 +450,17 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
-                    color:        _kGreen.withOpacity(0.06),
+                    color:        _kGreen.withValues(alpha:0.06),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.circle, size: 5, color: _kGreen),
-                      SizedBox(width: 4),
+                      const Icon(Icons.circle, size: 5, color: _kGreen),
+                      const SizedBox(width: 4),
                       Text(
-                        'Updated just now',
-                        style: TextStyle(
+                        _updatedLabel(),
+                        style: const TextStyle(
                           color:      _kGreen,
                           fontSize:   9,
                           fontWeight: FontWeight.w600,
@@ -454,9 +474,8 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
           ),
           const Divider(color: _kBorder, height: 1),
           Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 16, vertical: 8),
-            color: _kBorder.withOpacity(0.3),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: _kBorder.withValues(alpha:0.3),
             child: const Row(
               children: [
                 SizedBox(width: 44,
@@ -465,14 +484,14 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                 SizedBox(width: 70,
                     child: Text('DIST', style: _hdr,
                         textAlign: TextAlign.right)),
-                SizedBox(width: 80,
+                SizedBox(width: 72,
                     child: Text('PACE', style: _hdr,
                         textAlign: TextAlign.right)),
               ],
             ),
           ),
           Expanded(
-            child: _leaderboard.isEmpty
+            child: rows.isEmpty
                 ? const Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
@@ -487,16 +506,15 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                     ),
                   )
                 : ListView.builder(
-                    itemCount: _leaderboard.length,
+                    itemCount: rows.length,
                     itemBuilder: (_, i) {
-                      final e    = _leaderboard[i];
+                      final e    = rows[i];
                       final rank = (e['rank'] as int?) ?? (i + 1);
                       final name = e['name']?.toString()
                           ?? e['runner_name']?.toString()
                           ?? 'Unknown';
                       final bib  = e['bib_number']?.toString() ?? '—';
-                      final dist = (e['distance_km'] as num?)
-                          ?? (e['distance_covered_km'] as num?);
+                      final dist = (e['distance_km'] as num?);
                       final pace = e['pace_formatted']?.toString() ?? '—';
 
                       Color rankColor;
@@ -509,7 +527,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
 
                       return Container(
                         color: i.isEven
-                            ? Colors.white.withOpacity(0.01)
+                            ? Colors.white.withValues(alpha:0.01)
                             : Colors.transparent,
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 9),
@@ -521,11 +539,10 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                                   ? Container(
                                       width: 24, height: 24,
                                       decoration: BoxDecoration(
-                                        color:  rankColor.withOpacity(0.15),
+                                        color:  rankColor.withValues(alpha:0.15),
                                         shape:  BoxShape.circle,
                                         border: Border.all(
-                                            color: rankColor
-                                                .withOpacity(0.5)),
+                                            color: rankColor.withValues(alpha:0.5)),
                                       ),
                                       alignment: Alignment.center,
                                       child: Text(
@@ -537,30 +554,21 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                                         ),
                                       ),
                                     )
-                                  : Text(
-                                      '$rank',
+                                  : Text('$rank',
                                       style: const TextStyle(
-                                          color:    _kTextMuted,
-                                          fontSize: 12),
-                                    ),
+                                          color: _kTextMuted, fontSize: 12)),
                             ),
                             Expanded(
                               child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    name,
-                                    style: const TextStyle(
-                                        color: _kTextPri, fontSize: 12),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    '#$bib',
-                                    style: const TextStyle(
-                                        color:    _kTextMuted,
-                                        fontSize: 10),
-                                  ),
+                                  Text(name,
+                                      style: const TextStyle(
+                                          color: _kTextPri, fontSize: 12),
+                                      overflow: TextOverflow.ellipsis),
+                                  Text('#$bib',
+                                      style: const TextStyle(
+                                          color: _kTextMuted, fontSize: 10)),
                                 ],
                               ),
                             ),
@@ -568,7 +576,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                               width: 70,
                               child: Text(
                                 dist != null
-                                    ? '${dist.toStringAsFixed(1)} km'
+                                    ? '${dist.toStringAsFixed(2)} km'
                                     : '—',
                                 style: const TextStyle(
                                     color: _kGreen, fontSize: 11),
@@ -576,13 +584,11 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
                               ),
                             ),
                             SizedBox(
-                              width: 80,
-                              child: Text(
-                                pace,
-                                style: const TextStyle(
-                                    color: _kGreen, fontSize: 11),
-                                textAlign: TextAlign.right,
-                              ),
+                              width: 72,
+                              child: Text(pace,
+                                  style: const TextStyle(
+                                      color: _kGreen, fontSize: 11),
+                                  textAlign: TextAlign.right),
                             ),
                           ],
                         ),
@@ -602,8 +608,7 @@ class _PublicRaceDetailScreenState extends State<PublicRaceDetailScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.wifi_off_rounded,
-              color: _kTextMuted, size: 48),
+          const Icon(Icons.wifi_off_rounded, color: _kTextMuted, size: 48),
           const SizedBox(height: 12),
           Text(_error!,
               style: const TextStyle(color: _kTextSub, fontSize: 13)),
@@ -635,12 +640,11 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(
-            horizontal: 14, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color:        color.withOpacity(0.06),
+          color:        color.withValues(alpha:0.06),
           borderRadius: BorderRadius.circular(10),
-          border:       Border.all(color: color.withOpacity(0.2)),
+          border:       Border.all(color: color.withValues(alpha:0.2)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
